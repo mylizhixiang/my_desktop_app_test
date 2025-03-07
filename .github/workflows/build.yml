@@ -26,10 +26,10 @@ jobs:
       - name: 📦 生成 MSIX 安装包
         run: |
           flutter pub add msix
-          flutter pub run msix:create \
-            --display-name "打包测试安装包" \    # ✅ 应用显示名
-            --publisher "CN=TestPublisher" \   # ✅ 测试证书标识
-            --build-number "$(date +%Y%m%d)" \ # ⚡ 动态生成构建号（如 20240209） 
+          flutter pub run msix:create `
+            --display-name "打包测试安装包" `    # ✅ 应用显示名
+            --publisher "CN=TestPublisher" `   # ✅ 测试证书标识
+            --build-number "$(date +%Y%m%d)" ` # ⚡ 动态生成构建号（如 20240209） 
             --version 1.0.0.0                  # ✅ 合规四段版本号
 
       - name: ⬆️ Upload Windows安装包
@@ -68,4 +68,3 @@ jobs:
           path: linux-package.deb
 
 
-          
