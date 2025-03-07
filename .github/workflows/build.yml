@@ -38,7 +38,7 @@ jobs:
           name: windows-package
           path: build/windows/runner/Release/*.msix
 
-  # ========== Linux 构建部分 ==========
+  # ========== Linux 构建部分 =================
   build-linux:
     runs-on: ubuntu-22.04
     name: 🐧 构建 Linux 安装包
