@@ -1,0 +1,68 @@
+
+name: 🚀 自动构建双平台安装包
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  # ========== Windows 构建部分 ==========
+  build-windows:
+    runs-on: windows-latest
+    name: 🔨 构建 Windows 安装包
+    steps:
+      - name: ⬇️ 检出代码
+        uses: actions/checkout@v4
+
+      - name: 🧰 设置 Flutter 环境
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.20.0'  # 👈 修改为你的版本
+
+      - name: 🏗️ 构建 Windows Release
+        run: flutter build windows --release
+
+      - name: 📦 生成 MSIX 安装包
+        run: |
+          flutter pub add msix
+          flutter pub run msix:create \
+            --display-name "打包测试安装包" \    # ✅ 应用显示名
+            --publisher "CN=TestPublisher" \   # ✅ 测试证书标识
+            --build-number "$(date +%Y%m%d)" \ # ⚡ 动态生成构建号（如 20240209） 
+            --version 1.0.0.0                  # ✅ 合规四段版本号
+
+      - name: ⬆️ Upload Windows安装包
+        uses: actions/upload-artifact@v3
+        with:
+          name: windows-package
+          path: build/windows/runner/Release/*.msix
+
+  # ========== Linux 构建部分 ==========
+  build-linux:
+    runs-on: ubuntu-22.04
+    name: 🐧 构建 Linux 安装包
+    steps:
+      - name: ⬇️ 检出代码
+        uses: actions/checkout@v4
+
+      - name: 🧰 设置 Flutter 环境
+        uses: subosito/flutter-action@v2
+
+      - name: 🔧 安装依赖库
+        run: sudo apt-get install -y libgtk-3-dev
+
+      - name: 🏗️ 构建 Linux Release
+        run: flutter build linux --release
+
+      - name: 📦 打包 DEB 安装包
+        run: |
+          cd build/linux/x64/release/bundle
+          sudo dpkg-deb --build ./ linux-app.deb
+          mv linux-app.deb ${{ github.workspace }}/linux-package.deb
+
+      - name: ⬆️ Upload Linux安装包
+        uses: actions/upload-artifact@v3
+        with:
+          name: linux-package
+          path: linux-package.deb
