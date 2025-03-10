@@ -24,12 +24,13 @@ jobs:
         run: flutter build windows --release
 
       - name: 📦 生成 MSIX 安装包
+        shell: bash  # 💡 关键修改：强制使用bash解析命令
         run: |
           flutter pub add msix
           flutter pub run msix:create `
-            --display-name "打包测试安装包" `    # ✅ 应用显示名
-            --publisher "CN=TestPublisher" `   # ✅ 测试证书标识
-            --build-number "$(date +%Y%m%d)" ` # ⚡ 动态生成构建号（如 20240209） 
+            --display-name "打包测试安装包" \    # ✅ 应用显示名
+            --publisher "CN=TestPublisher" \  # ✅ 测试证书标识
+            --build-number "$(date +%Y%m%d)" \ # ⚡ 动态生成构建号（如 20240209） 
             --version 1.0.0.0                  # ✅ 合规四段版本号
 
       - name: ⬆️ Upload Windows安装包
@@ -37,6 +38,13 @@ jobs:
         with:
           name: windows-package
           path: build/windows/runner/Release/*.msix
+      - name: ⚙️ 调试环境信息 (可选)
+        run: |
+          echo "Flutter 版本:"
+          flutter --version
+          echo "当前用户: $(whoami)"
+          echo "当前路径: $PWD"
+          
 
   # ========== Linux 构建部分 =================
   build-linux:
@@ -50,20 +58,38 @@ jobs:
         uses: subosito/flutter-action@v2
 
       - name: 🔧 安装依赖库
-        run: sudo apt-get install -y libgtk-3-dev
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y \
+            build-essential \
+            cmake \
+            ninja-build \
+            clang \
+            libgtk-3-dev \
+            liblzma-dev \
+            pkg-config
 
       - name: 🏗️ 构建 Linux Release
-        run: flutter build linux --release
+        run: |  # 💡 增加编译前校验
+          echo "=== 验证编译环境 ==="
+          cmake --version
+          ninja --version
+          flutter config --enable-linux-desktop
+          flutter build linux --release
 
       - name: 📦 打包 DEB 安装包
         run: |
+          # cd build/linux/x64/release/bundle
+          # sudo dpkg-deb --build ./ linux-app.deb
+          # mv linux-app.deb ${{ github.workspace }}/linux-package.deb
+
+          mkdir -p ${{ github.workspace }}/artifacts  # 创建明确的输出目录
           cd build/linux/x64/release/bundle
-          sudo dpkg-deb --build ./ linux-app.deb
-          mv linux-app.deb ${{ github.workspace }}/linux-package.deb
+          sudo dpkg-deb --build . ${{ github.workspace }}/artifacts/linux-package.deb
 
       - name: ⬆️ Upload Linux安装包
         uses: actions/upload-artifact@v4.3.1
         with:
           name: linux-package
-          path: linux-package.deb
+          path: ${{ github.workspace }}/artifacts/linux-package.deb
 
