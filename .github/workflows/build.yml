@@ -96,7 +96,7 @@ jobs:
           Package: $PKG_NAME
           Version: $VERSION
           Architecture: amd64
-          Maintainer: Lizhixiang <1107664795@qq.com>
+          Maintainer: LizhixiangLizhixiang <1107664795@qq.com>
           Description: Flutter Application Built via GitHub Actions
           EOF
         
