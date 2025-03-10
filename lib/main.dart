@@ -75,7 +75,7 @@ class MyHomePage extends StatelessWidget {
                 ElevatedButton.icon (
                   onPressed: () {
                     appState.toggleFavorite();
-                    print('button pressed!');
+                    print('button pressed!button pressed!');
                   },
                   icon: Icon(icon),
                   label: Text('Like'),
