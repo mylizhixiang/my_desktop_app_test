@@ -90,7 +90,7 @@ jobs:
           echo "Package: ${PKG_NAME}
             Version: ${VERSION}
             Architecture: amd64
-            Maintainer: lizhixiang <11.7664795@qq.com>  # ❗❗ 改成你的信息
+            Maintainer: Lizhixiang <11.7664795@qq.com>  # ❗❗ 改成你的信息
             Description: A Flutter application built via GitHub Actions
           " > ${{ github.workspace }}/deb_package/DEBIAN/control
         
