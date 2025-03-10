@@ -28,8 +28,9 @@ jobs:
         run: |
           flutter pub add msix
           flutter pub run msix:create \
-            --display-name "打包测试安装包" \    # ✅ 应用显示名
+            --display-name "打包测试安装包" \   # ✅ 应用显示名
             --publisher "CN=TestPublisher" \  # ✅ 测试证书标识
+            --no-prompt \           # 👈 关键修复
             --build-number "$(date +%Y%m%d)" \ # ⚡ 动态生成构建号（如 20240209） 
             --version 1.0.0.0                  # ✅ 合规四段版本号
 
@@ -79,25 +80,29 @@ jobs:
 
       - name: 📦 打包 DEB 安装包
         run: |
+          # ========== 新增变量定义 ========== 
+          APP_BIN_PATH=$(find build/linux/x64/release/bundle -maxdepth 1 -type f -executable | head -n 1)
+          PKG_NAME="myapp"  # 必须全小写，仅包含字母、数字和减号
+          VERSION="1.0.0-$(date +%Y%m%d)"
           # 💡 创建必要的DEB包目录结构
           mkdir -p ${{ github.workspace }}/deb_package/usr/local/bin
-          mkdir -p ${{ github.workspace }}/deb_package/DEBIAN
+          mkdir -p /deb_package/DEBIAN
+
+          # ✅ 正确生成 control 文件
+          cat <<EOF > deb_package/DEBIAN/control
+      Package: $PKG_NAME
+      Version: $VERSION
+      Architecture: amd64
+      Maintainer: Lizhixiang <1107664795@qq.com>
+      Description: Flutter Application Built via GitHub Actions
+      EOF
         
           # 💡 复制构建产物到打包目录（调整路径为你的实际可执行文件位置）
           cp -r build/linux/x64/release/bundle/* ${{ github.workspace }}/deb_package/usr/local/bin/
-
-          # 💡 创建control文件（需自定义下列参数）
-          echo "Package: ${PKG_NAME}
-            Version: ${VERSION}
-            Architecture: amd64
-            Maintainer: Lizhixiang <11.7664795@qq.com>  # ❗❗ 改成你的信息
-            Description: A Flutter application built via GitHub Actions
-          " > ${{ github.workspace }}/deb_package/DEBIAN/control
-        
           # 💡 设置文件权限（必须步骤）
           find ${{ github.workspace }}/deb_package -type d -exec chmod 755 {} \;
           find ${{ github.workspace }}/deb_package -type f -exec chmod 644 {} \;
-          chmod +x ${{ github.workspace }}/deb_package/usr/local/bin/$(basename $APP_BIN)
+          chmod +x ${{ github.workspace }}/deb_package/usr/local/bin/$(basename $APP_BIN_PATH)
         
           # 💡 构建DEB包
           dpkg-deb --build ${{ github.workspace }}/deb_package ${{ github.workspace }}/linux-package.deb
