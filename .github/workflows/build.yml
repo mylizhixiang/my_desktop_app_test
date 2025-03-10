@@ -27,7 +27,7 @@ jobs:
         shell: bash  # 💡 关键修改：强制使用bash解析命令
         run: |
           flutter pub add msix
-          flutter pub run msix:create `
+          flutter pub run msix:create \
             --display-name "打包测试安装包" \    # ✅ 应用显示名
             --publisher "CN=TestPublisher" \  # ✅ 测试证书标识
             --build-number "$(date +%Y%m%d)" \ # ⚡ 动态生成构建号（如 20240209） 
@@ -79,17 +79,33 @@ jobs:
 
       - name: 📦 打包 DEB 安装包
         run: |
-          # cd build/linux/x64/release/bundle
-          # sudo dpkg-deb --build ./ linux-app.deb
-          # mv linux-app.deb ${{ github.workspace }}/linux-package.deb
+          # 💡 创建必要的DEB包目录结构
+          mkdir -p ${{ github.workspace }}/deb_package/usr/local/bin
+          mkdir -p ${{ github.workspace }}/deb_package/DEBIAN
+        
+          # 💡 复制构建产物到打包目录（调整路径为你的实际可执行文件位置）
+          cp -r build/linux/x64/release/bundle/* ${{ github.workspace }}/deb_package/usr/local/bin/
 
-          mkdir -p ${{ github.workspace }}/artifacts  # 创建明确的输出目录
-          cd build/linux/x64/release/bundle
-          sudo dpkg-deb --build . ${{ github.workspace }}/artifacts/linux-package.deb
+          # 💡 创建control文件（需自定义下列参数）
+          echo "Package: ${PKG_NAME}
+            Version: ${VERSION}
+            Architecture: amd64
+            Maintainer: lizhixiang <11.7664795@qq.com>  # ❗❗ 改成你的信息
+            Description: A Flutter application built via GitHub Actions
+          " > ${{ github.workspace }}/deb_package/DEBIAN/control
+        
+          # 💡 设置文件权限（必须步骤）
+          find ${{ github.workspace }}/deb_package -type d -exec chmod 755 {} \;
+          find ${{ github.workspace }}/deb_package -type f -exec chmod 644 {} \;
+          chmod +x ${{ github.workspace }}/deb_package/usr/local/bin/$(basename $APP_BIN)
+        
+          # 💡 构建DEB包
+          dpkg-deb --build ${{ github.workspace }}/deb_package ${{ github.workspace }}/linux-package.deb
+          
 
       - name: ⬆️ Upload Linux安装包
         uses: actions/upload-artifact@v4.3.1
         with:
           name: linux-package
-          path: ${{ github.workspace }}/artifacts/linux-package.deb
+          path: ${{ github.workspace }}/linux-package.deb
 
