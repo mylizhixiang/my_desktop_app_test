@@ -101,7 +101,7 @@ jobs:
           EOF
         
           # 💡 复制构建产物到打包目录（调整路径为你的实际可执行文件位置）
-          cp -r build/linux/x64/release/bundle/* ${{ github.workspace }}/deb_package/usr/local/bin/
+          cp -v "$APP_BIN_PATH" deb_package/usr/local/bin/
           # 💡 设置文件权限（必须步骤）
           find deb_package -type d -exec chmod 755 {} \;
           find deb_package -type f -exec chmod 644 {} \;
