@@ -12,6 +12,9 @@ on:
 jobs:
   build-linux:
     runs-on: ubuntu-latest
+    container:
+      image: centos:7
+      options: --privileged
 
     steps:
       # ------------ 环境准备 ------------
@@ -19,12 +22,11 @@ jobs:
         uses: actions/checkout@v4
 
       # ------------ 安装构建依赖 ------------
-      - name: Install Linux dependencies
+      - name: Install CentOS dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-              clang cmake ninja-build pkg-config \
-              libgtk-3-dev liblzma-dev libstdc++-12-dev
+          yum -y update
+          yum -y install epel-release
+          yum -y install clang cmake ninja-build pkgconfig gtk3-devel rpm-build redhat-rpm-config git
 
       # ------------ 配置 Flutter SDK ------------
       - name: Setup Flutter
@@ -42,33 +44,53 @@ jobs:
     #     run: flutter test
 
       # ------------ 构建 Release 版本 ------------
-      - name: Build Linux app
-        run: flutter build linux --release --dart-define=APP_ENV=prod
-
-      # ------------ 打包 DEB 安装包 ------------
-      - name: Create DEB package
+      - name: Build Linux app(CentOS兼容)
         run: |
-          mkdir -p deb_pkg/DEBIAN
-          mkdir -p linux_build  # ✅ 新增此行创建输出目录
-          echo "Package: my-desktop-app
+          flutter config --enable-linux-desktop
+          flutter build linux --release --target-platform=linux-x64
+
+      # ------------ 打包 RPM 安装包 ------------
+      - name: Create RPM package
+        run: |
+          mkdir -p ~/rpmbuild/{BUILD,RPMS,SOURCES,SPECS,SRPMS}
+          # 复制构建产到 BUILD 目录（注意目录名！假设项目名是 "my-desktop-app"）
+          cp -r build/linux/x64/release/bundle ~/rpmbuild/BUILD/my-desktop-app
+          # 完整写入 SPEC 文件（直接替换名称即可使用）
+          echo "%define _topdir $(echo ~)/rpmbuild
+          Name: my-desktop-app
           Version: 1.0.0
-          Architecture: amd64
+          Release: 1%{?dist}
+          Summary: My Flutter App
+          License: MIT
+          URL: https://github.com/mylizhixiang/my_desktop_app_test
+          Requires: gtk3, libstdc++
           Maintainer: Lizhixiang <1107664795@qq.com>
-          Description: My Flutter App
-          " > deb_pkg/DEBIAN/control
 
-          mkdir -p deb_pkg/usr/bin
-          cp -r build/linux/x64/release/bundle/* deb_pkg/usr/bin/
+          %description
+          My cross-platform Flutter app built for CentOS.
 
-          dpkg-deb --build deb_pkg linux_build/my-desktop-app_1.0.0_amd64.deb
+          %install
+          mkdir -p %{buildroot}/usr/bin/my-desktop-app
+          cp -r %{_builddir}/myapp/* %{buildroot}/usr/bin/my-desktop-app
+
+          %files
+          /usr/bin/my-desktop-app/*
+          " > ~/rpmbuild/SPECS/myapp.spec
+
+          # 构建 RPM
+          rpmbuild -bb ~/rpmbuild/SPECS/myapp.spec
+
+          # 移动生成的 RPM 到显式目录
+          mkdir -p rpm_packages
+          cp ~/rpmbuild/RPMS/x86_64/*.rpm rpm_packages/
 
       # ------------ 上传构建产物（到 Artifacts） ------------
       - name: Upload artifacts
         uses: actions/upload-artifact@v4.3.1
         with:
-          name: linux-package
+          name: centos-package
           path: |
-            linux_build/*.deb
+            rpm_packages/*.rpm
             build/linux/x64/release/bundle/
 
       # ------------ （可选）发布到 GitHub Releases ------------
