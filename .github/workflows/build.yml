@@ -52,7 +52,7 @@ jobs:
           echo "Package: my-desktop-app
           Version: 1.0.0
           Architecture: amd64
-          Maintainer: GitHub Actions <1107664795@qq.com>
+          Maintainer: Lizhixiang <1107664795@qq.com>
           Description: My Flutter App
           " > deb_pkg/DEBIAN/control
 
