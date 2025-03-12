@@ -71,13 +71,13 @@ jobs:
             build/linux/x64/release/bundle/
 
       # ------------ （可选）发布到 GitHub Releases ------------
-      - name: Create GitHub Release
-        if: github.event_name == 'release' && github.event.action == 'created' 
-        uses: softprops/action-gh-release@v1
-        with:
-          files: |
-            linux_build/*.deb
-          draft: false
-          prerelease: false
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    #   - name: Create GitHub Release
+    #     if: github.event_name == 'release' && github.event.action == 'created' 
+    #     uses: softprops/action-gh-release@v1
+    #     with:
+    #       files: |
+    #         linux_build/*.deb
+    #       draft: false
+    #       prerelease: false
+    #     env:
+    #       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
