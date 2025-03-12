@@ -49,7 +49,7 @@ jobs:
       - name: Create DEB package
         run: |
           mkdir -p deb_pkg/DEBIAN
-          echo "Package: my_desktop_app
+          echo "Package: my-desktop-app
           Version: 1.0.0
           Architecture: amd64
           Maintainer: GitHub Actions <1107664795@qq.com>
@@ -59,7 +59,7 @@ jobs:
           mkdir -p deb_pkg/usr/bin
           cp -r build/linux/x64/release/bundle/* deb_pkg/usr/bin/
 
-          dpkg-deb --build deb_pkg linux_build/my-app_1.0.0_amd64.deb
+          dpkg-deb --build deb_pkg linux_build/my-desktop-app_1.0.0_amd64.deb
 
       # ------------ 上传构建产物（到 Artifacts） ------------
       - name: Upload artifacts
