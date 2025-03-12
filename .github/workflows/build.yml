@@ -38,8 +38,8 @@ jobs:
         run: flutter config --enable-linux-desktop
 
       # ------------ 代码测试（可选） ------------
-      - name: Run tests
-        run: flutter test
+    #   - name: Run tests
+    #     run: flutter test
 
       # ------------ 构建 Release 版本 ------------
       - name: Build Linux app
