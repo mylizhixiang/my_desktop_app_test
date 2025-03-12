@@ -49,6 +49,7 @@ jobs:
       - name: Create DEB package
         run: |
           mkdir -p deb_pkg/DEBIAN
+          mkdir -p linux_build  # ✅ 新增此行创建输出目录
           echo "Package: my-desktop-app
           Version: 1.0.0
           Architecture: amd64
