@@ -25,15 +25,20 @@ jobs:
       - name: Install CentOS dependencies
         run: |
           yum -y update
-          yum -y install epel-release
-          yum -y install clang cmake ninja-build pkgconfig gtk3-devel rpm-build redhat-rpm-config git
+          yum -y install centos-release-scl epel-release
+          yum -y install devtoolset-9-gcc* clang cmake ninja-build gtk3-devel \
+            libxkbcommon-x11-devel libstdc++-static rpm-build redhat-rpm-config
+          # 激活新版本的 GCC
+          echo "source /opt/rh/devtoolset-9/enable" >> ~/.bashrc
 
       # ------------ 配置 Flutter SDK ------------
-      - name: Setup Flutter
-        uses: subosito/flutter-action@v2
-        with:
-          channel: stable
-          cache: true  # 启用包缓存
+      - name: Install Flutter SDK manually
+        run: |
+          wget https://storage.googleapis.com/flutter_infra_release/releases/stable/linux/flutter_linux_3.22.4-stable.tar.xz
+          tar -xf flutter_linux_3.22.4-stable.tar.xz
+          echo "$GITHUB_WORKSPACE/flutter/bin" >> $GITHUB_PATH
+          # Flutter 初始化
+          flutter doctor
 
       # ------------ 配置 Linux 构建支持 ------------
       - name: Enable Linux desktop
@@ -44,14 +49,15 @@ jobs:
     #     run: flutter test
 
       # ------------ 构建 Release 版本 ------------
-      - name: Build Linux app(CentOS兼容)
+      - name: Build Linux app for CentOS
         run: |
-          flutter config --enable-linux-desktop
+          source /opt/rh/devtoolset-9/enable  # 确保使用新编译器
           flutter build linux --release --target-platform=linux-x64
 
       # ------------ 打包 RPM 安装包 ------------
       - name: Create RPM package
         run: |
+          # 设置目录结构
           mkdir -p ~/rpmbuild/{BUILD,RPMS,SOURCES,SPECS,SRPMS}
           # 复制构建产到 BUILD 目录（注意目录名！假设项目名是 "my-desktop-app"）
           cp -r build/linux/x64/release/bundle ~/rpmbuild/BUILD/my-desktop-app
@@ -60,7 +66,7 @@ jobs:
           Name: my-desktop-app
           Version: 1.0.0
           Release: 1%{?dist}
-          Summary: My Flutter App
+          Summary: My Flutter App for CentOS
           License: MIT
           URL: https://github.com/mylizhixiang/my_desktop_app_test
           Requires: gtk3, libstdc++
@@ -70,15 +76,19 @@ jobs:
           My cross-platform Flutter app built for CentOS.
 
           %install
-          mkdir -p %{buildroot}/usr/bin/my-desktop-app
-          cp -r %{_builddir}/myapp/* %{buildroot}/usr/bin/my-desktop-app
+          mkdir -p %{buildroot}/opt/my-desktop-app
+          cp -r %{_builddir}/my-desktop-app/* %{buildroot}/opt/my-desktop-app
+          # 创建启动器符号链接
+          mkdir -p %{buildroot}/usr/bin
+          ln -s /opt/my-desktop-app/myapp %{buildroot}/usr/bin/my-desktop-app
 
           %files
-          /usr/bin/my-desktop-app/*
-          " > ~/rpmbuild/SPECS/myapp.spec
+           /opt/my-desktop-app/*
+          /usr/bin/my-desktop-app
+          " > ~/rpmbuild/SPECS/my-desktop-app.spec  # 注意 SPEC 文件名保持一致
 
           # 构建 RPM
-          rpmbuild -bb ~/rpmbuild/SPECS/myapp.spec
+           rpmbuild -bb ~/rpmbuild/SPECS/my-desktop-app.spec --verbose
 
           # 移动生成的 RPM 到显式目录
           mkdir -p rpm_packages
@@ -89,9 +99,8 @@ jobs:
         uses: actions/upload-artifact@v4.3.1
         with:
           name: centos-package
-          path: |
-            rpm_packages/*.rpm
-            build/linux/x64/release/bundle/
+          path: rpm_packages/*.rpm
+            
 
       # ------------ （可选）发布到 GitHub Releases ------------
     #   - name: Create GitHub Release
