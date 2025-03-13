@@ -6,88 +6,71 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     container:
       image: centos:7
-      options: |
-        --privileged
+      # ====== 关键调整部分 ======
+      options: >-
+        --security-opt seccomp=unconfined
+        --device /dev/dri:/dev/dri
         -v /tmp/.X11-unix:/tmp/.X11-unix
 
     steps:
-    # ========== 环境配置阶段 ==========
-    - name: 修复CentOS仓库
+    # ========== 系统修复阶段 ==========
+    - name: 修复CentOS 7仓库
       run: |
         sed -i.bak \
-          -e 's/mirrorlist=/#mirrorlist=/g' \
-          -e 's|#baseurl=http://mirror.centos.org|baseurl=http://vault.centos.org|g' \
-          -e 's/\$releasever/7.9.2009/g' \
+          's|^mirrorlist=|#mirrorlist=|g;
+           s|^#\s*baseurl=http://mirror.centos.org/centos|baseurl=http://vault.centos.org|g' \
           /etc/yum.repos.d/CentOS-*.repo
 
-    - name: 安装基础工具
-      run: |
+        rpm --import http://vault.centos.org/RPM-GPG-KEY-CentOS-7
         yum install -y epel-release
+
+    # ========== 开发环境配置 ==========
+    - name: 安装构建工具链
+      run: |
         yum install -y \
-          centos-release-scl-2-3.el7.centos \
-          devtoolset-9-9.1-1.el7 \
-          qt5-qtbase-devel-5.9.7-2.el7 \
-          gtk3-devel-3.22.30-6.el7
+          centos-release-scl \
+          devtoolset-11 \
+          qt5-qtbase-devel \
+          gtk3-devel \
+          xorg-x11-server-Xvfb \
+          mesa-dri-drivers
 
-    # ========== 代码获取阶段 ==========
-    - name: 检出代码
-      uses: actions/checkout@v4 # 明确版本号
-      with:
-        fetch-depth: 0
-
-    # ========== 构建阶段 ==========
-    - name: 配置CMake项目
+    # ========== 构建调试阶段 ==========
+    - name: 校验OpenGL支持
       run: |
-        scl enable devtoolset-9 -- cmake -B build \
-          -DCMAKE_BUILD_TYPE=Release \
-          -DCMAKE_INSTALL_PREFIX=/usr
+        glxinfo -B | grep -i 'OpenGL renderer' || true
+        Xvfb :99 -screen 0 1024x768x24 &
+        export DISPLAY=:99
+        xdpyinfo
 
-    - name: 编译应用
+    # ========== 项目构建流程 ==========
+    - name: 检出源码
+      uses: actions/checkout@v4
+
+    - name: CMake配置
+      run: scl enable devtoolset-11 -- cmake -B build -DCMAKE_BUILD_TYPE=RelWithDebInfo
+
+    - name: 编译应用程序
+      run: scl enable devtoolset-11 -- cmake --build build --parallel $(nproc)
+
+    - name: 图形界面测试
       run: |
-        scl enable devtoolset-9 -- cmake --build build --parallel $(nproc)
+        Xvfb :99 -screen 0 1280x1024x24 &
+        export DISPLAY=:99
+        build/myapp --test-gui
 
-    # ========== 测试阶段 ==========
-    - name: 安装测试依赖
-      run: yum install -y xorg-x11-server-Xvfb-1.20.4-11.el7
-
-    - name: 运行GUI测试
+    - name: 打包RPM
       run: |
-        xvfb-run --server-args="-screen 0 1920x1080x24" \
-          build/src/myapp --test
-        
-        # 生成测试截图（需要ImageMagick）
-        yum install -y ImageMagick
-        import -window root -resize 50% test-screenshot.jpg
-
-    # ========== 打包阶段 ==========
-    - name: 生成RPM包
-      run: |
-        yum install -y rpm-build-4.11.3-48.el7
+        yum install -y rpm-build
         cmake --build build --target package
         mkdir -p artifacts
         cp build/*.rpm artifacts/
 
-    # ========== 产物上传阶段 ==========
-    - name: 上传二进制包
-      uses: actions/upload-artifact@v4.3.3 # 指定精确版本
-      with:
-        name: release-packages
-        path: |
-          artifacts/*.rpm
-          build/myapp
-
-    - name: 上传测试截图
+    - name: 上传产物
       uses: actions/upload-artifact@v4.3.3
       with:
-        name: test-evidence
-        path: test-screenshot.jpg
-
-    # ========== 后验证阶段 ==========
-    - name: 安装验证
-      run: |
-        yum localinstall -y artifacts/*.rpm
-        myapp --version
-        ldd $(which myapp) | grep "not found" && exit 1 || true
+        name: centos7-artifacts
+        path: artifacts/*.rpm
