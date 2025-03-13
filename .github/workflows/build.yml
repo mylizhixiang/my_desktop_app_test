@@ -19,53 +19,57 @@ jobs:
         -v /usr/bin/docker:/usr/bin/docker
 
     steps:
-      # ===== [1] 初始化容器环境 =====
-      - name: Setup Base System
-        run: |
-          # 修复 yum 源（必须第一步执行）
-          sed -i.bak \
-            -e 's/mirrorlist/#mirrorlist/g' \
-            -e 's|#baseurl=http://mirror.centos.org|baseurl=http://vault.centos.org|g' \
-            /etc/yum.repos.d/CentOS-*
+      - name: 安装基础工具
+        run: yum install -y curl ca-certificates
 
-          # 安装核心工具
-          yum install -y \
-            centos-release-scl epel-release \
-            curl wget tar xz which
-
-      # ===== [2] 安装开发工具链 =====
-      - name: Final Fix and Install
+      - name: 修复标准仓库
         run: |
-          # ======== 仓库修复阶段 ========
-          # (1) 基础核心仓库修复
           sed -i.bak \
           -e 's/mirrorlist/#mirrorlist/g' \
           -e 's|#*baseurl=http://mirror.centos.org|baseurl=http://vault.centos.org|g' \
           /etc/yum.repos.d/CentOS-*.repo
 
-          # (2) 修复SCL特殊路径层级
+      - name: 强制安装SCL源
+        run: yum install -y centos-release-scl centos-release-scl-rh || true
+
+      - name: 检查SCL仓库文件
+        run: |
+          if ! ls /etc/yum.repos.d/CentOS-SCLo-sclo*.repo >/dev/null 2>&1; then
+          echo "手动生成SCL仓库文件..."
+          rpm -ql centos-release-scl | grep '\.repo' | xargs -I{} cp -v {} /etc/yum.repos.d/
+          ls -l /etc/yum.repos.d/CentOS-SCLo*
+          fi
+
+      - name: 修复SCL路径
+        run: |
           sed -i \
-          -e 's|baseurl=http://mirror.centos.org/centos/\$releasever/sclo/\(.*\)/|baseurl=http://vault.centos.org/centos/7.9.2009/sclo/\1/|g' \
+          -e 's|baseurl=http://.*/centos/\$releasever/sclo/|baseurl=http://vault.centos.org/centos/7.9.2009/sclo/x86_64/sclo/|g' \
           /etc/yum.repos.d/CentOS-SCLo-*.repo
+          grep -H "baseurl" /etc/yum.repos.d/CentOS-SCLo-*.repo
 
-          # (3) 全局版本号锁定
-          find /etc/yum.repos.d/ -name "*.repo" -exec sed -i 's/\$releasever/7.9.2009/g' {} \;
+      - name: 版本号全局锁定
+        run: |
+          find /etc/yum.repos.d/ -name "*.repo" -exec sed -i \
+          -e 's/\$releasever/7.9.2009/g' \
+          -e 's|/centos/7/|/centos/7.9.2009/|g' \
+          {} +
 
-          # ======== 缓存彻底清理 ========
+      - name: 严格仓库测试
+        run: |
+          SCLO_URL=$(grep 'baseurl=' /etc/yum.repos.d/CentOS-SCLo-sclo.repo | cut -d= -f2 | tr -d ' ')
+          echo "测试仓库：$SCLO_URL"
+          curl -sfI "${SCLO_URL}/repodata/repomd.xml" || {
+          echo "验证失败！当前Vault目录结构示例："
+          curl -s http://vault.centos.org/centos/7.9.2009/sclo/x86_64/sclo/ | grep '_'
+          exit 1
+          }
+
+      - name: 安装编译工具链
+        run: |
           yum clean all
-          rm -rf /var/cache/yum/*
-          rpm --rebuilddb
-
-          # ======== 仓库可达性测试 ========
-          echo "测试SCLo-sclo仓库可达性..."
-          TEST_URL=$(grep -A2 '\[centos-sclo-sclo\]' /etc/yum.repos.d/CentOS-SCLo-sclo.repo | grep baseurl | cut -d= -f2 | tr -d ' ')
-          curl -sI "$TEST_URL/repodata/repomd.xml" | grep "200 OK" || (echo "仓库不可达！"; exit 1)
-
-          # ======== 重建缓存 ========
           yum makecache
-
-          # ======== 安装工具链 ========
-          yum install -y devtoolset-9 devtoolset-9-gcc-c++ clang cmake ninja-build gtk3-devel libxkbcommon-x11-devel
+          yum install -y devtoolset-9 gcc-c++ clang
+          
 
 
       # ===== [3] 安装 Node.js =====
