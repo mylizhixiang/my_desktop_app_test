@@ -36,11 +36,23 @@ jobs:
       # ===== [2] 安装开发工具链 =====
       - name: Install Development Tools
         run: |
-          # 新增：修复 SCL 相关仓库配置
+          # 修复基础仓库
           sed -i.bak \
           -e 's/mirrorlist/#mirrorlist/g' \
           -e 's|#baseurl=http://mirror.centos.org|baseurl=http://vault.centos.org|g' \
+          /etc/yum.repos.d/CentOS-*.repo
+
+          # 新增：修复 SCL 专用仓库 ⭐️
+          sed -i \
+          -e 's|baseurl=http://mirror.centos.org|baseurl=http://vault.centos.org|g' \
+          -e 's/mirrorlist/#mirrorlist/g' \
           /etc/yum.repos.d/CentOS-SCLo-*.repo
+
+          # ===== 执行缓存清理（必须在此处！！！）=====
+          yum clean all            # 清除元数据
+          rm -rf /var/cache/yum    # 彻底删除缓存目录
+          yum makecache           # 强制重建缓存
+
           # 安装编译工具集合
           yum install -y \
             devtoolset-9 \
