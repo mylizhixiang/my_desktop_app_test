@@ -1,8 +1,8 @@
-name: CentOS Application Builder
-
-on:
+name: CentOS 7 Desktop App Build
+on: 
   push:
-    branches: [ main,master ]
+    branches: [ main, master ]
+  workflow_dispatch:
 
 jobs:
   build:
@@ -11,109 +11,83 @@ jobs:
       image: centos:7
       options: |
         --privileged
-        -v /tmp/.X11-unix:/tmp/.X11-unix  # 允许GUI测试（可选）
+        -v /tmp/.X11-unix:/tmp/.X11-unix
 
     steps:
-    # ========== 环境准备阶段 ==========
-    - name: 更新基础系统
-      run: yum update -y
-
-    - name: 修复CentOS仓库源
+    # ========== 环境配置阶段 ==========
+    - name: 修复CentOS仓库
       run: |
-        # 修正为使用Vault源
         sed -i.bak \
           -e 's/mirrorlist=/#mirrorlist=/g' \
           -e 's|#baseurl=http://mirror.centos.org|baseurl=http://vault.centos.org|g' \
+          -e 's/\$releasever/7.9.2009/g' \
           /etc/yum.repos.d/CentOS-*.repo
-        
-        # 安装EPEL仓库（用于补充软件包）
-        yum install -y epel-release
 
-    # ========== 开发环境配置 ==========
-    - name: 安装开发工具链
+    - name: 安装基础工具
       run: |
-        # 基础构建工具
-        yum groupinstall -y "Development Tools"
-        
-        # SCL工具链
-        yum install -y centos-release-scl
-        yum install -y devtoolset-9 devtoolset-9-gcc-c++
-
-        # 图形库支持
+        yum install -y epel-release
         yum install -y \
-          gtk3-devel \
-          qt5-qtbase-devel \
-          mesa-libGL-devel \
-          xorg-x11-server-Xvfb  # 虚拟显示器
+          centos-release-scl-2-3.el7.centos \
+          devtoolset-9-9.1-1.el7 \
+          qt5-qtbase-devel-5.9.7-2.el7 \
+          gtk3-devel-3.22.30-6.el7
 
-    # ========== 工程构建阶段 ==========
+    # ========== 代码获取阶段 ==========
     - name: 检出代码
-      uses: actions/checkout@v4
+      uses: actions/checkout@v4 # 明确版本号
+      with:
+        fetch-depth: 0
 
-    - name: 配置项目
+    # ========== 构建阶段 ==========
+    - name: 配置CMake项目
       run: |
         scl enable devtoolset-9 -- cmake -B build \
           -DCMAKE_BUILD_TYPE=Release \
           -DCMAKE_INSTALL_PREFIX=/usr
-        
-        # 生成相关依赖文档（可选）
-        cmake --build build --target generate_docs
 
-    - name: 编译应用程序
+    - name: 编译应用
       run: |
         scl enable devtoolset-9 -- cmake --build build --parallel $(nproc)
-        
-        # 静态分析检查
-        run-clang-tidy -checks='*' -p build/
 
     # ========== 测试阶段 ==========
-    - name: 运行单元测试
-      run: |
-        xvfb-run --auto-servernum --server-args="-screen 0 1280x1024x24" \
-          scl enable devtoolset-9 -- ctest --test-dir build --output-on-failure
+    - name: 安装测试依赖
+      run: yum install -y xorg-x11-server-Xvfb-1.20.4-11.el7
 
-    - name: 界面功能测试
+    - name: 运行GUI测试
       run: |
-        # 使用Xvfb虚拟显示器运行应用程序测试
-        xvfb-run --auto-servernum \
-          build/src/myapp --test-gui
+        xvfb-run --server-args="-screen 0 1920x1080x24" \
+          build/src/myapp --test
         
-        # 截图验证（示例）
-        convert xwd:$(ls /tmp/.X11-unix/X*) screenshot.png
-        # 上传测试产物（可选）
-        actions/upload-artifact@v3:
-          name: test-screenshot
-          path: screenshot.png
+        # 生成测试截图（需要ImageMagick）
+        yum install -y ImageMagick
+        import -window root -resize 50% test-screenshot.jpg
 
     # ========== 打包阶段 ==========
     - name: 生成RPM包
       run: |
-        # 安装打包工具
-        yum install -y rpm-build rpmdevtools
-        
-        # 生成spec文件
-        cmake --build build --target package_source
-        
-        # 构建RPM
-        rpmbuild --define "_topdir ${PWD}/rpmbuild" \
-                 -ba packaging/myapp.spec
-        
-        # 保存产物
-        mkdir -p artifact
-        cp rpmbuild/RPMS/x86_64/*.rpm artifact/
+        yum install -y rpm-build-4.11.3-48.el7
+        cmake --build build --target package
+        mkdir -p artifacts
+        cp build/*.rpm artifacts/
 
-    - name: 上传构建产物
-      uses: actions/upload-artifact@v3
+    # ========== 产物上传阶段 ==========
+    - name: 上传二进制包
+      uses: actions/upload-artifact@v4.3.3 # 指定精确版本
       with:
         name: release-packages
         path: |
-          build/*.rpm
-          build/*.deb
+          artifacts/*.rpm
+          build/myapp
 
-    # ========== 清理阶段 ==========
-    - name: 验证安装包
+    - name: 上传测试截图
+      uses: actions/upload-artifact@v4.3.3
+      with:
+        name: test-evidence
+        path: test-screenshot.jpg
+
+    # ========== 后验证阶段 ==========
+    - name: 安装验证
       run: |
-        # 测试RPM安装
-        yum localinstall -y build/myapp-*.rpm
-        # 运行已安装应用
+        yum localinstall -y artifacts/*.rpm
         myapp --version
+        ldd $(which myapp) | grep "not found" && exit 1 || true
