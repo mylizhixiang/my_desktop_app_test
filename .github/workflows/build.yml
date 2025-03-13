@@ -34,39 +34,39 @@ jobs:
             curl wget tar xz which
 
       # ===== [2] 安装开发工具链 =====
-      - name: Setup Build Tools
+      - name: Final Fix and Install
         run: |
-          # ================ 仓库修复阶段 ================
-          # 标准基础仓库修复
+          # ======== 仓库修复阶段 ========
+          # (1) 基础核心仓库修复
           sed -i.bak \
           -e 's/mirrorlist/#mirrorlist/g' \
-          -e 's|#baseurl=http://mirror.centos.org|baseurl=http://vault.centos.org|g' \
-          -e 's/\$releasever/7/g' \
+          -e 's|#*baseurl=http://mirror.centos.org|baseurl=http://vault.centos.org|g' \
           /etc/yum.repos.d/CentOS-*.repo
-    
-          # SCL特殊路径修复
+
+          # (2) 修复SCL特殊路径层级
           sed -i \
-          -e 's|baseurl=.*centos/7/sclo/.*/|baseurl=http://vault.centos.org/centos/7/sclo/x86_64/|g' \
-          -e 's/mirrorlist/#mirrorlist/g' \
+          -e 's|baseurl=http://mirror.centos.org/centos/\$releasever/sclo/\(.*\)/|baseurl=http://vault.centos.org/centos/7.9.2009/sclo/\1/|g' \
           /etc/yum.repos.d/CentOS-SCLo-*.repo
-        
-          # 全局强制版本锁定
-          find /etc/yum.repos.d/ -name "*.repo" -exec sed -i 's/\$releasever/7/g' {} +
-    
-          # ================ 缓存系统重置 ================
+
+          # (3) 全局版本号锁定
+          find /etc/yum.repos.d/ -name "*.repo" -exec sed -i 's/\$releasever/7.9.2009/g' {} \;
+
+          # ======== 缓存彻底清理 ========
           yum clean all
+          rm -rf /var/cache/yum/*
           rpm --rebuilddb
-          find /var/cache/yum -type f -delete
+
+          # ======== 仓库可达性测试 ========
+          echo "测试SCLo-sclo仓库可达性..."
+          TEST_URL=$(grep -A2 '\[centos-sclo-sclo\]' /etc/yum.repos.d/CentOS-SCLo-sclo.repo | grep baseurl | cut -d= -f2 | tr -d ' ')
+          curl -sI "$TEST_URL/repodata/repomd.xml" | grep "200 OK" || (echo "仓库不可达！"; exit 1)
+
+          # ======== 重建缓存 ========
           yum makecache
-    
-          # ================ 工具链安装 ================
-          yum install -y \
-          devtoolset-9 \
-          devtoolset-9-gcc-c++ \
-          clang cmake ninja-build \
-          gtk3-devel libxkbcommon-x11-devel
-    
-          source /opt/rh/devtoolset-9/enable
+
+          # ======== 安装工具链 ========
+          yum install -y devtoolset-9 devtoolset-9-gcc-c++ clang cmake ninja-build gtk3-devel libxkbcommon-x11-devel
+
 
       # ===== [3] 安装 Node.js =====
       - name: Install Node.js
