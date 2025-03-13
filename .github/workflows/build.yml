@@ -36,6 +36,11 @@ jobs:
       # ===== [2] 安装开发工具链 =====
       - name: Install Development Tools
         run: |
+          # 新增：修复 SCL 相关仓库配置
+          sed -i.bak \
+          -e 's/mirrorlist/#mirrorlist/g' \
+          -e 's|#baseurl=http://mirror.centos.org|baseurl=http://vault.centos.org|g' \
+          /etc/yum.repos.d/CentOS-SCLo-*.repo
           # 安装编译工具集合
           yum install -y \
             devtoolset-9 \
