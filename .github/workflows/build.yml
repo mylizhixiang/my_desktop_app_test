@@ -14,9 +14,17 @@ jobs:
     runs-on: ubuntu-latest
     container:
       image: centos:7
-      options: --privileged
+      # 禁止挂载宿主机的 Node 环境
+      options: --privileged --volume /__e 
 
     steps:
+      # ----- 手工安装低版本 Node.js -----
+      - name: Install Legacy Node.js (v16)
+        run: |
+          # CentOS 7 兼容的 Node 16 安装方式
+          curl -sL https://rpm.nodesource.com/setup_16.x | bash -
+          yum -y install nodejs
+
       # ------------ 环境准备 ------------
       - name: Checkout code
         uses: actions/checkout@v4
