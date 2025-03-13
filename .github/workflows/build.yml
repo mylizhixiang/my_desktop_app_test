@@ -18,12 +18,53 @@ jobs:
       options: --privileged --volume /__e 
 
     steps:
+    #   - name: Install Legacy Node.js (Fix Edition)
+    #     run: |
+    #        # STEP 1 - 修复镜像源
+    #        # 删除旧镜像配置
+    #        rm -rf /etc/yum.repos.d/CentOS-*
+    #        # 写入新的 Vault 源配置
+    #        cat <<EOF > /etc/yum.repos.d/CentOS-Base.repo
+    #        [base]
+    #        name=CentOS-\$releasever - Base
+    #        baseurl=http://vault.centos.org/centos/\$releasever/os/\$basearch/
+    #        gpgcheck=1
+    #        gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-CentOS-7
+    
+    #        [updates]
+    #        name=CentOS-\$releasever - Updates
+    #        baseurl=http://vault.centos.org/centos/\$releasever/updates/\$basearch/
+    #        gpgcheck=1
+    #        gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-CentOS-7
+    
+    #        [extras]
+    #        name=CentOS-\$releasever - Extras
+    #        baseurl=http://vault.centos.org/centos/\$releasever/extras/\$basearch/
+    #        gpgcheck=1
+    #        gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-CentOS-7
+    #        EOF
+
+    #        # STEP 2 - 更新软件源
+    #        yum clean all
+    #        yum -y update ca-certificates curl
+    #        yum -y install epel-release
+
+    #        # STEP 3 - 安装 Node 16
+    #        curl -sL https://rpm.nodesource.com/setup_16.x | bash -
+    #        yum -y install nodejs
+
       # ----- 手工安装低版本 Node.js -----
-      - name: Install Legacy Node.js (v16)
+      - name: Install Node.js via Binary
         run: |
-          # CentOS 7 兼容的 Node 16 安装方式
-          curl -sL https://rpm.nodesource.com/setup_16.x | bash -
-          yum -y install nodejs
+           # 下载 Node.js 16 二进制包
+           curl -O https://nodejs.org/dist/v16.20.2/node-v16.20.2-linux-x64.tar.xz
+           tar -xf node-v16.20.2-linux-x64.tar.xz
+           # 部署到系统路径
+           mv node-v16.20.2-linux-x64 /opt/node
+           ln -s /opt/node/bin/node /usr/local/bin/node
+           ln -s /opt/node/bin/npm /usr/local/bin/npm
+           # 验证
+           node --version
 
       # ------------ 环境准备 ------------
       - name: Checkout code
@@ -32,12 +73,16 @@ jobs:
       # ------------ 安装构建依赖 ------------
       - name: Install CentOS dependencies
         run: |
+          # 修复仓库源（关键！）
+          sed -i 's/mirrorlist/#mirrorlist/g' /etc/yum.repos.d/CentOS-*
+          sed -i 's|#baseurl=http://mirror.centos.org|baseurl=http://vault.centos.org|g' /etc/yum.repos.d/CentOS-*
+          
           yum -y update
           yum -y install centos-release-scl epel-release
           yum -y install devtoolset-9-gcc* clang cmake ninja-build gtk3-devel \
             libxkbcommon-x11-devel libstdc++-static rpm-build redhat-rpm-config
           # 激活新版本的 GCC
-          echo "source /opt/rh/devtoolset-9/enable" >> ~/.bashrc
+        #   echo "source /opt/rh/devtoolset-9/enable" >> ~/.bashrc
 
       # ------------ 配置 Flutter SDK ------------
       - name: Install Flutter SDK manually
@@ -46,11 +91,13 @@ jobs:
           tar -xf flutter_linux_3.22.4-stable.tar.xz
           echo "$GITHUB_WORKSPACE/flutter/bin" >> $GITHUB_PATH
           # Flutter 初始化
-          flutter doctor
+          source /opt/rh/devtoolset-9/enable && flutter doctor -v
 
       # ------------ 配置 Linux 构建支持 ------------
       - name: Enable Linux desktop
-        run: flutter config --enable-linux-desktop
+        run: |
+          source /opt/rh/devtoolset-9/enable
+          flutter config --enable-linux-desktop
 
       # ------------ 代码测试（可选） ------------
     #   - name: Run tests
@@ -60,17 +107,20 @@ jobs:
       - name: Build Linux app for CentOS
         run: |
           source /opt/rh/devtoolset-9/enable  # 确保使用新编译器
+          echo "Current GCC: $(gcc --version | head -1)"
           flutter build linux --release --target-platform=linux-x64
 
       # ------------ 打包 RPM 安装包 ------------
       - name: Create RPM package
         run: |
+          source /opt/rh/devtoolset-9/enable
           # 设置目录结构
           mkdir -p ~/rpmbuild/{BUILD,RPMS,SOURCES,SPECS,SRPMS}
           # 复制构建产到 BUILD 目录（注意目录名！假设项目名是 "my-desktop-app"）
           cp -r build/linux/x64/release/bundle ~/rpmbuild/BUILD/my-desktop-app
           # 完整写入 SPEC 文件（直接替换名称即可使用）
-          echo "%define _topdir $(echo ~)/rpmbuild
+          cat << 'EOF' > ~/rpmbuild/SPECS/my-desktop-app.spec
+          %define _topdir %(echo ~)/rpmbuild
           Name: my-desktop-app
           Version: 1.0.0
           Release: 1%{?dist}
@@ -78,6 +128,7 @@ jobs:
           License: MIT
           URL: https://github.com/mylizhixiang/my_desktop_app_test
           Requires: gtk3, libstdc++
+          BuildArch: x86_64
           Maintainer: Lizhixiang <1107664795@qq.com>
 
           %description
@@ -91,12 +142,12 @@ jobs:
           ln -s /opt/my-desktop-app/myapp %{buildroot}/usr/bin/my-desktop-app
 
           %files
-           /opt/my-desktop-app/*
+          /opt/my-desktop-app/*
           /usr/bin/my-desktop-app
-          " > ~/rpmbuild/SPECS/my-desktop-app.spec  # 注意 SPEC 文件名保持一致
+          EOF
 
           # 构建 RPM
-           rpmbuild -bb ~/rpmbuild/SPECS/my-desktop-app.spec --verbose
+          rpmbuild -bb ~/rpmbuild/SPECS/my-desktop-app.spec --verbose
 
           # 移动生成的 RPM 到显式目录
           mkdir -p rpm_packages
