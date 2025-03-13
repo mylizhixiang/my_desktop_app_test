@@ -2,7 +2,7 @@ name: CentOS Application Builder
 
 on:
   push:
-    branches: [ main，master ]
+    branches: [ main,master ]
 
 env:
   FLUTTER_VERSION: "3.29.0"
