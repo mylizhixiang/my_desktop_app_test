@@ -4,111 +4,43 @@ on:
   push:
     branches: [ main, master ]
 
-env:
-  FLUTTER_VERSION: "3.29.0"  # 定义 flutter 版本变量
 
 jobs:
   build:
     runs-on: ubuntu-latest
-
-    # 使用原生 CentOS 7 容器（未污染配置版）
     container:
       image: centos:7
-      options: --privileged 
-        -v /var/run/docker.sock:/var/run/docker.sock 
+      options: --privileged
+        -v /var/run/docker.sock:/var/run/docker.sock
         -v /usr/bin/docker:/usr/bin/docker
 
     steps:
-      # ==== [STEP 1] 强制初始化容器环境 ====
-      - name: Initialize Container
-        run: |
-          # 修复 yum 源（必须前置）
-          sudo sed -i.bak \
-            -e 's/mirrorlist/#mirrorlist/g' \
-            -e 's|#baseurl=http://mirror.centos.org|baseurl=http://vault.centos.org|g' \
-            /etc/yum.repos.d/CentOS-*
+    # ======= Stage 1 - 初始化容器 ======= 
+    - name: Prepare Environment
+      run: |  # [!code focus:9]
+        # 关键步骤：禁用镜像列表，指定源地址
+        sed -i.bak \
+          -e 's/mirrorlist/#mirrorlist/g' \
+          -e 's|#baseurl=http://mirror.centos.org|baseurl=http://vault.centos.org|g' \
+          /etc/yum.repos.d/CentOS-*
 
-          # 安装基本工具链
-          sudo yum install -y \
-            curl wget which findutils \
-            centos-release-scl epel-release
+        # 安装基础工具链（root 用户直接执行）
+        yum install -y \
+          curl wget which findutils \
+          centos-release-scl glibc-langpack-en \
+          devtoolset-9-gcc* clang cmake ninja-build
 
-      # ==== [STEP 2] 安装开发工具链 ====
-      - name: Setup Dev Tools
-        run: |
-          sudo yum install -y \
-            devtoolset-9-gcc* \
-            clang cmake ninja-build \
-            gtk3-devel libxkbcommon-x11-devel \
-            rpm-build redhat-rpm-config
+    # ======= Stage 2 - 安装 Flutter =======
+    - name: Install Flutter
+      run: |
+        export FLUTTER_VERSION="3.29.0"
+        wget -q https://storage.googleapis.com/flutter_infra_release/releases/stable/linux/flutter_linux_${FLUTTER_VERSION}-stable.tar.xz
+        tar -xf flutter_linux_${FLUTTER_VERSION}-stable.tar.xz -C /opt
+        echo "/opt/flutter/bin" >> $GITHUB_PATH
 
-      # ==== [STEP 3] 安装 Node.js 16 ====
-      - name: Install Node.js
-        run: |
-          NODE_VERSION="v16.20.2"
-          curl -L -o node.tar.xz \
-            https://nodejs.org/dist/${NODE_VERSION}/node-${NODE_VERSION}-linux-x64.tar.xz
-          
-          sudo tar -xJf node.tar.xz -C /opt
-          sudo ln -sf /opt/node-${NODE_VERSION#v}-linux-x64/bin/node /usr/local/bin/node
-          sudo ln -sf /opt/node-${NODE_VERSION#v}-linux-x64/bin/npm /usr/local/bin/npm
-
-      # ==== [STEP 4] 安装 Flutter ====
-      - name: Install Flutter
-        run: |
-          FLUTTER_URL="https://storage.googleapis.com/flutter_infra_release/releases/stable/linux/flutter_linux_${FLUTTER_VERSION}-stable.tar.xz"
-
-          wget -q "${FLUTTER_URL}" -O flutter.tar.xz
-          sudo tar -xJf flutter.tar.xz -C /opt
-          echo "/opt/flutter/bin" >> $GITHUB_PATH
-
-      # ==== [STEP 5] 构建应用 ====
-      - name: Build Application
-        run: |
-          source /opt/rh/devtoolset-9/enable
-          flutter config --enable-linux-desktop
-          flutter build linux --release
-
-      # ==== [STEP 6] RPM 打包 ====
-      - name: Generate RPM Package
-        run: |
-          # 设置 RPM 目录结构
-          mkdir -p ~/rpmbuild/{BUILD,RPMS,SOURCES,SPECS,SRPMS}
-
-          # 复制构建产物
-          cp -r build/linux/x64/release/bundle ~/rpmbuild/BUILD/myapp
-
-          # 生成 SPEC 文件（禁止任何注释干扰）
-          cat << 'EOF' > ~/rpmbuild/SPECS/myapp.spec
-          Name: my-desktop-app
-          Version: 1.0.0
-          Release: 1%{?dist}
-          Summary: My Flutter Application
-          License: MIT
-          URL: https://github.com/mylizhixiang/my_desktop_app_test
-          Requires: gtk3, libstdc++
-
-          %description
-          Cross-platform application built with Flutter.
-
-          %install
-          mkdir -p %{buildroot}/opt/my-desktop-app
-          cp -r %{_builddir}/my-desktop-app/* %{buildroot}/opt/my-desktop-app
-          ln -sf /opt/myapp/my-desktop-app %{buildroot}/usr/bin/my-desktop-app
-
-          %files
-          /opt/my-desktop-app/*
-          /usr/bin/my-desktop-app
-          EOF
-
-          # 构建 RPM
-          rpmbuild -bb ~/rpmbuild/SPECS/my-desktop-app.spec
-          mkdir -p artifacts
-          cp ~/rpmbuild/RPMS/x86_64/*.rpm artifacts/
-
-      # ==== [STEP 7] 上传产物 ====
-      - name: Upload Artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: centos-rpms
-          path: artifacts/*.rpm
+    # ======= Stage 3 - 构建应用 =======
+    - name: Build Project
+      run: |  # [!code focus:3]
+        source /opt/rh/devtoolset-9/enable
+        flutter config --enable-linux-desktop
+        flutter build linux --release
