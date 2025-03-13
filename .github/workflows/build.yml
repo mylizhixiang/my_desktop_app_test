@@ -15,7 +15,10 @@ jobs:
     container:
       image: centos:7
       # 禁止挂载宿主机的 Node 环境
-      options: --privileged --volume /__e 
+      options: |
+        --privileged 
+        -v /var/run/docker.sock:/var/run/docker.sock  # 确保可执行 docker-in-docker
+        -v /usr/bin/docker:/usr/bin/docker            # 绑定宿主机 docker 客户端
 
     steps:
     #   - name: Install Legacy Node.js (Fix Edition)
@@ -52,6 +55,17 @@ jobs:
     #        # STEP 3 - 安装 Node 16
     #        curl -sL https://rpm.nodesource.com/setup_16.x | bash -
     #        yum -y install nodejs
+
+      - name: Prepare Container Tools
+        run: |
+          # 确保容器内有基本工具
+          yum install -y which findutils grep
+      - name: Verify Container OS
+        run: |
+          # 此命令将可正常执行
+          cat /etc/*release | grep ^ID
+          # 预期输出：ID="centos"
+
 
       # ----- 手工安装低版本 Node.js -----
       - name: Install Node.js via Binary
