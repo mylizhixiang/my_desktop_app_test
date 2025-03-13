@@ -1,106 +1,114 @@
-name: Build Flutter Linux App
+name: CentOS Flutter Build
 
 on:
   push:
-    branches: [main, master]
-  pull_request:
-    branches: [main, master]
+    branches: [ main, master ]
+
+env:
+  FLUTTER_VERSION: "3.29.0"  # 定义 flutter 版本变量
 
 jobs:
-  build-linux:
+  build:
     runs-on: ubuntu-latest
+
+    # 使用原生 CentOS 7 容器（未污染配置版）
     container:
       image: centos:7
-      options: --privileged -v /var/run/docker.sock:/var/run/docker.sock -v /usr/bin/docker:/usr/bin/docker
+      options: --privileged 
+        -v /var/run/docker.sock:/var/run/docker.sock 
+        -v /usr/bin/docker:/usr/bin/docker
 
     steps:
-      # ---------- 容器初始化 ----------
-      - name: Prepare Container Environment
+      # ==== [STEP 1] 强制初始化容器环境 ====
+      - name: Initialize Container
         run: |
-          # 确保基础工具可用
-          yum install -y which findutils curl
+          # 修复 yum 源（必须前置）
+          sudo sed -i.bak \
+            -e 's/mirrorlist/#mirrorlist/g' \
+            -e 's|#baseurl=http://mirror.centos.org|baseurl=http://vault.centos.org|g' \
+            /etc/yum.repos.d/CentOS-*
 
-      # ---------- 安装 Node.js ----------
-      - name: Install Node.js via Binary
+          # 安装基本工具链
+          sudo yum install -y \
+            curl wget which findutils \
+            centos-release-scl epel-release
+
+      # ==== [STEP 2] 安装开发工具链 ====
+      - name: Setup Dev Tools
         run: |
-          curl -L -o node.tar.xz https://nodejs.org/dist/v16.20.2/node-v16.20.2-linux-x64.tar.xz
-          tar -xf node.tar.xz -C /opt
-          mv /opt/node-v16.20.2-linux-x64 /opt/node
-          ln -sf /opt/node/bin/node /usr/local/bin/node
-          node --version
+          sudo yum install -y \
+            devtoolset-9-gcc* \
+            clang cmake ninja-build \
+            gtk3-devel libxkbcommon-x11-devel \
+            rpm-build redhat-rpm-config
 
-      # ---------- 检出代码 ----------
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      # ---------- 安装 CentOS 依赖 ----------
-      - name: Install CentOS Dependencies
+      # ==== [STEP 3] 安装 Node.js 16 ====
+      - name: Install Node.js
         run: |
-          # 修复 yum 源
-          sed -i.bak 's/mirrorlist/#mirrorlist/g' /etc/yum.repos.d/CentOS-*
-          sed -i 's|#baseurl=http://mirror.centos.org|baseurl=http://vault.centos.org|g' /etc/yum.repos.d/CentOS-*
+          NODE_VERSION="v16.20.2"
+          curl -L -o node.tar.xz \
+            https://nodejs.org/dist/${NODE_VERSION}/node-${NODE_VERSION}-linux-x64.tar.xz
           
-          yum -y update
-          yum -y install centos-release-scl epel-release
-          yum -y install devtoolset-9-gcc* clang cmake ninja-build gtk3-devel \
-            libxkbcommon-x11-devel libstdc++-static rpm-build redhat-rpm-config
+          sudo tar -xJf node.tar.xz -C /opt
+          sudo ln -sf /opt/node-${NODE_VERSION#v}-linux-x64/bin/node /usr/local/bin/node
+          sudo ln -sf /opt/node-${NODE_VERSION#v}-linux-x64/bin/npm /usr/local/bin/npm
 
-      # ---------- 安装 Flutter ----------
-      - name: Install Flutter SDK
+      # ==== [STEP 4] 安装 Flutter ====
+      - name: Install Flutter
         run: |
-          wget -q https://storage.googleapis.com/flutter_infra_release/releases/stable/linux/flutter_linux_3.22.4-stable.tar.xz
-          tar -xf flutter_linux_3.22.4-stable.tar.xz
-          echo "$GITHUB_WORKSPACE/flutter/bin" >> $GITHUB_PATH
+          FLUTTER_URL="https://storage.googleapis.com/flutter_infra_release/releases/stable/linux/flutter_linux_${FLUTTER_VERSION}-stable.tar.xz"
 
-      # ---------- 配置环境 ----------
-      - name: Setup Build Environment
+          wget -q "${FLUTTER_URL}" -O flutter.tar.xz
+          sudo tar -xJf flutter.tar.xz -C /opt
+          echo "/opt/flutter/bin" >> $GITHUB_PATH
+
+      # ==== [STEP 5] 构建应用 ====
+      - name: Build Application
         run: |
           source /opt/rh/devtoolset-9/enable
           flutter config --enable-linux-desktop
+          flutter build linux --release
 
-      # ---------- 构建应用 ----------
-      - name: Build Linux Release
+      # ==== [STEP 6] RPM 打包 ====
+      - name: Generate RPM Package
         run: |
-          source /opt/rh/devtoolset-9/enable
-          flutter build linux --release --target-platform=linux-x64
-
-      # ---------- 生成 RPM ----------
-      - name: Create RPM Package
-        run: |
+          # 设置 RPM 目录结构
           mkdir -p ~/rpmbuild/{BUILD,RPMS,SOURCES,SPECS,SRPMS}
-          cp -r build/linux/x64/release/bundle ~/rpmbuild/BUILD/my-desktop-app
 
-          cat << EOF > ~/rpmbuild/SPECS/my-desktop-app.spec
-          %define _topdir %(pwd)/rpmbuild
+          # 复制构建产物
+          cp -r build/linux/x64/release/bundle ~/rpmbuild/BUILD/myapp
+
+          # 生成 SPEC 文件（禁止任何注释干扰）
+          cat << 'EOF' > ~/rpmbuild/SPECS/myapp.spec
           Name: my-desktop-app
           Version: 1.0.0
-          Release: 1
-          Summary: Flutter App
+          Release: 1%{?dist}
+          Summary: My Flutter Application
           License: MIT
           URL: https://github.com/mylizhixiang/my_desktop_app_test
           Requires: gtk3, libstdc++
-          
+
           %description
-          My Application
-          
+          Cross-platform application built with Flutter.
+
           %install
           mkdir -p %{buildroot}/opt/my-desktop-app
           cp -r %{_builddir}/my-desktop-app/* %{buildroot}/opt/my-desktop-app
-          mkdir -p %{buildroot}/usr/bin
-          ln -sf /opt/my-desktop-app/myapp %{buildroot}/usr/bin/my-desktop-app
-          
+          ln -sf /opt/myapp/my-desktop-app %{buildroot}/usr/bin/my-desktop-app
+
           %files
           /opt/my-desktop-app/*
           /usr/bin/my-desktop-app
           EOF
 
+          # 构建 RPM
           rpmbuild -bb ~/rpmbuild/SPECS/my-desktop-app.spec
-          mkdir -p rpm_packages
-          cp ~/rpmbuild/RPMS/x86_64/*.rpm rpm_packages/
+          mkdir -p artifacts
+          cp ~/rpmbuild/RPMS/x86_64/*.rpm artifacts/
 
-      # ---------- 上传产物 ----------
-      - name: Upload Artifact
+      # ==== [STEP 7] 上传产物 ====
+      - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: rpm-package
-          path: rpm_packages/*.rpm
+          name: centos-rpms
+          path: artifacts/*.rpm
