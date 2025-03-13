@@ -4,145 +4,116 @@ on:
   push:
     branches: [ main,master ]
 
-env:
-  FLUTTER_VERSION: "3.29.0"
-  NODE_VERSION: "v16.20.2"
-
 jobs:
   build:
     runs-on: ubuntu-latest
     container:
       image: centos:7
-      options: >-
+      options: |
         --privileged
-        -v /var/run/docker.sock:/var/run/docker.sock
-        -v /usr/bin/docker:/usr/bin/docker
+        -v /tmp/.X11-unix:/tmp/.X11-unix  # 允许GUI测试（可选）
 
     steps:
-      - name: 安装基础工具
-        run: yum install -y curl ca-certificates
+    # ========== 环境准备阶段 ==========
+    - name: 更新基础系统
+      run: yum update -y
 
-      - name: 修复标准仓库
-        run: |
-          sed -i.bak \
-          -e 's/mirrorlist/#mirrorlist/g' \
-          -e 's|#*baseurl=http://mirror.centos.org|baseurl=http://vault.centos.org|g' \
+    - name: 修复CentOS仓库源
+      run: |
+        # 修正为使用Vault源
+        sed -i.bak \
+          -e 's/mirrorlist=/#mirrorlist=/g' \
+          -e 's|#baseurl=http://mirror.centos.org|baseurl=http://vault.centos.org|g' \
           /etc/yum.repos.d/CentOS-*.repo
+        
+        # 安装EPEL仓库（用于补充软件包）
+        yum install -y epel-release
 
-      - name: 强制安装SCL源
-        run: yum install -y centos-release-scl centos-release-scl-rh || true
+    # ========== 开发环境配置 ==========
+    - name: 安装开发工具链
+      run: |
+        # 基础构建工具
+        yum groupinstall -y "Development Tools"
+        
+        # SCL工具链
+        yum install -y centos-release-scl
+        yum install -y devtoolset-9 devtoolset-9-gcc-c++
 
-      - name: 检查SCL仓库文件
-        run: |
-          if ! ls /etc/yum.repos.d/CentOS-SCLo-sclo*.repo >/dev/null 2>&1; then
-          echo "手动生成SCL仓库文件..."
-          rpm -ql centos-release-scl | grep '\.repo' | xargs -I{} cp -v {} /etc/yum.repos.d/
-          ls -l /etc/yum.repos.d/CentOS-SCLo*
-          fi
+        # 图形库支持
+        yum install -y \
+          gtk3-devel \
+          qt5-qtbase-devel \
+          mesa-libGL-devel \
+          xorg-x11-server-Xvfb  # 虚拟显示器
 
-      - name: 修复SCL路径
-        run: |
-          sed -i \
-          -e 's|baseurl=http://.*/centos/\$releasever/sclo/|baseurl=http://vault.centos.org/centos/7.9.2009/sclo/x86_64/sclo/|g' \
-          /etc/yum.repos.d/CentOS-SCLo-*.repo
-          grep -H "baseurl" /etc/yum.repos.d/CentOS-SCLo-*.repo
+    # ========== 工程构建阶段 ==========
+    - name: 检出代码
+      uses: actions/checkout@v4
 
-      - name: 版本号全局锁定
-        run: |
-          find /etc/yum.repos.d/ -name "*.repo" -exec sed -i \
-          -e 's/\$releasever/7.9.2009/g' \
-          -e 's|/centos/7/|/centos/7.9.2009/|g' \
-          {} +
+    - name: 配置项目
+      run: |
+        scl enable devtoolset-9 -- cmake -B build \
+          -DCMAKE_BUILD_TYPE=Release \
+          -DCMAKE_INSTALL_PREFIX=/usr
+        
+        # 生成相关依赖文档（可选）
+        cmake --build build --target generate_docs
 
-      - name: 严格仓库测试
-        run: |
-          SCLO_URL=$(grep 'baseurl=' /etc/yum.repos.d/CentOS-SCLo-sclo.repo | cut -d= -f2 | tr -d ' ')
-          echo "测试仓库：$SCLO_URL"
-          curl -sfI "${SCLO_URL}/repodata/repomd.xml" || {
-          echo "验证失败！当前Vault目录结构示例："
-          curl -s http://vault.centos.org/centos/7.9.2009/sclo/x86_64/sclo/ | grep '_'
-          exit 1
-          }
+    - name: 编译应用程序
+      run: |
+        scl enable devtoolset-9 -- cmake --build build --parallel $(nproc)
+        
+        # 静态分析检查
+        run-clang-tidy -checks='*' -p build/
 
-      - name: 安装编译工具链
-        run: |
-          yum clean all
-          yum makecache
-          yum install -y devtoolset-9 gcc-c++ clang
-          
+    # ========== 测试阶段 ==========
+    - name: 运行单元测试
+      run: |
+        xvfb-run --auto-servernum --server-args="-screen 0 1280x1024x24" \
+          scl enable devtoolset-9 -- ctest --test-dir build --output-on-failure
 
+    - name: 界面功能测试
+      run: |
+        # 使用Xvfb虚拟显示器运行应用程序测试
+        xvfb-run --auto-servernum \
+          build/src/myapp --test-gui
+        
+        # 截图验证（示例）
+        convert xwd:$(ls /tmp/.X11-unix/X*) screenshot.png
+        # 上传测试产物（可选）
+        actions/upload-artifact@v3:
+          name: test-screenshot
+          path: screenshot.png
 
-      # ===== [3] 安装 Node.js =====
-      - name: Install Node.js
-        run: |
-          wget https://nodejs.org/dist/$NODE_VERSION/node-$NODE_VERSION-linux-x64.tar.xz
-          tar -xJf node-$NODE_VERSION-linux-x64.tar.xz -C /opt
-          ln -sf /opt/node-$NODE_VERSION-linux-x64/bin/node /usr/local/bin/node
-          ln -sf /opt/node-$NODE_VERSION-linux-x64/bin/npm /usr/local/bin/npm
+    # ========== 打包阶段 ==========
+    - name: 生成RPM包
+      run: |
+        # 安装打包工具
+        yum install -y rpm-build rpmdevtools
+        
+        # 生成spec文件
+        cmake --build build --target package_source
+        
+        # 构建RPM
+        rpmbuild --define "_topdir ${PWD}/rpmbuild" \
+                 -ba packaging/myapp.spec
+        
+        # 保存产物
+        mkdir -p artifact
+        cp rpmbuild/RPMS/x86_64/*.rpm artifact/
 
-      # ===== [4] 安装 Flutter SDK =====
-      - name: Install Flutter
-        run: |
-          FLUTTER_URL="https://storage.googleapis.com/flutter_infra_release/releases/stable/linux/flutter_linux_${FLUTTER_VERSION}-stable.tar.xz"
-          wget -q "$FLUTTER_URL" -O flutter.tar.xz
-          tar -xJf flutter.tar.xz -C /opt
-          echo "/opt/flutter/bin" >> $GITHUB_PATH
+    - name: 上传构建产物
+      uses: actions/upload-artifact@v3
+      with:
+        name: release-packages
+        path: |
+          build/*.rpm
+          build/*.deb
 
-      # ===== [5] 构建应用程序 =====
-      - name: Build Application
-        run: |
-          # 确保 devtoolset 环境生效
-          source /opt/rh/devtoolset-9/enable
-          
-          flutter config --enable-linux-desktop
-          flutter pub get
-          flutter build linux --release
-
-          # 创建构建目录
-          mkdir -p build/artifacts
-          cp -r build/linux/x64/release/bundle/* build/artifacts/
-
-      # ===== [6] RPM 打包 =====
-      - name: Generate RPM Package
-        run: |-
-          # 配置 RPM 构建环境
-          cat > ~/.rpmmacros << EOF
-          %_topdir /home/runner/rpmbuild
-          %_tmppath /home/runner/rpmbuild/tmp
-          EOF
-
-          mkdir -p ~/rpmbuild/{BUILD,RPMS,SOURCES,SPECS,SRPMS}
-
-          # 创建 SPEC 文件
-          cat << 'EOF' > ~/rpmbuild/SPECS/my-desktop-app.spec
-          Name: my-desktop-app
-          Version: 1.0.0
-          Release: 1%{?dist}
-          Summary: Application built on CentOS 7
-          License: MIT
-          URL: https://github.com/mylizhixiang/my_desktop_app_test
-
-          %description
-          CentOS 7 compatible application package.
-
-          %install
-          mkdir -p %{buildroot}/opt/my-desktop-app
-          cp -r /__w/your-repo/your-repo/build/artifacts/* %{buildroot}/opt/my-desktop-app
-
-          %files
-          /opt/my-desktop-app/*
-          EOF
-
-          # 构建 RPM
-          rpmbuild -bb ~/rpmbuild/SPECS/my-desktop-app.spec
-          mkdir -p artifacts
-          cp ~/rpmbuild/RPMS/x86_64/*.rpm artifacts/
-
-      # ===== [7] 上传产物 =====
-      - name: Upload Artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: centos-packages
-          path: |
-            build/artifacts/
-            artifacts/*.rpm
+    # ========== 清理阶段 ==========
+    - name: 验证安装包
+      run: |
+        # 测试RPM安装
+        yum localinstall -y build/myapp-*.rpm
+        # 运行已安装应用
+        myapp --version
