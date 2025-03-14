@@ -15,9 +15,17 @@ jobs:
         --dns 1.1.1.1  
         --device /dev/dri
         -v /tmp/.X11-unix:/tmp/.X11-unix
+        -v /github/workspace:/workspace  
 
     steps:
-    # ========== 阶段1：基础环境修复 ==========
+    # ================= 阶段1：宿主机检出代码 =================
+    - name: Checkout (Host执行)
+      uses: actions/checkout@v4
+      with:
+        path: /github/workspace
+        container: null  
+
+    # ========== 阶段2：基础环境配置 ==========
     - name: 初始化仓库与网络
       run: |
         # DNS修复
@@ -30,71 +38,115 @@ jobs:
         sed -i -e 's/^mirrorlist/#mirrorlist/g' -e 's/^#baseurl=/baseurl=/g' /etc/yum.repos.d/CentOS-Base.repo
         rpm --import https://repo.huaweicloud.com/epel/RPM-GPG-KEY-EPEL-7
 
+         # 微软源/GPG密钥(新加的)
+        rpm --import https://packages.microsoft.com/keys/microsoft.asc
+        curl -sSLo /etc/yum.repos.d/msprod.repo \
+          https://packages.microsoft.com/config/rhel/7/prod.repo
+
         # 重建缓存
         yum clean all
         yum makecache fast
+        
+    # ================= 阶段3：工具链升级 =================
+    - name: 升级开发环境
+      run: |
+        # 安装新版工具链 | **解决GLIBC问题**
+        yum install -y centos-release-scl
+        yum install -y devtoolset-10 llvm-toolset-7
 
-    # ========== 阶段2：工具链安装 ==========    
+        # 启用高版本工具链
+        echo 'source /opt/rh/devtoolset-10/enable' | tee -a /etc/profile.d/devtools.sh
+        echo 'export PATH="/opt/rh/llvm-toolset-7/root/bin:$PATH"' | tee -a /etc/profile.d/devtools.sh
+        source /etc/profile.d/devtools.sh
+
+        # 兼容性验证
+        gcc --version  # 应显示10.x版本
+        clang --version
+
+    # ========== 阶段4：依赖安装 ==========    
     - name: 安装基础设施
       run: |
-        # 基础网络工具
+        # 基础包（使用华为源）
         yum install -y \
           ca-certificates \
           curl \
           wget \
-          bind-utils \
+          git \
+          xorg-x11-server-Xvfb \
+          mesa-dri-drivers \ 
           --nogpgcheck
 
-        yum install -y epel-release
-        yum groupinstall -y "Development Tools"
+          # GUI依赖集
+        yum groupinstall -y "GNOME Desktop" --setopt=group_package_types=mandatory
         yum install -y \
-          clang \
-          cmake \
-          ninja-build \
           gtk3-devel \
-          mesa-libGL-devel \
           libxkbcommon-x11-devel \
-          xorg-x11-server-Xvfb
+          dbus-x11
 
-    # ========== Flutter SDK ==========
+        # yum install -y epel-release
+        # yum groupinstall -y "Development Tools"
+        # yum install -y \
+        #   clang \
+        #   cmake \
+        #   ninja-build \
+        #   gtk3-devel \
+        #   mesa-libGL-devel \
+        #   libxkbcommon-x11-devel \
+        #   xorg-x11-server-Xvfb
+
+    # ========== 阶段5：Flutter环境 ==========
     - name: 安装Flutter
       run: |
         cd /opt
         wget https://storage.googleapis.com/flutter_infra_release/releases/stable/linux/flutter_linux_3.29.0-stable.tar.xz
         tar xf flutter_linux_3.29.0-stable.tar.xz
-        echo 'export PATH="$PATH:/opt/flutter/bin"' >> /etc/profile.d/flutter.sh
-        source /etc/profile.d/flutter.sh
+        # echo 'export PATH="$PATH:/opt/flutter/bin"' >> /etc/profile.d/flutter.sh
+        # source /etc/profile.d/flutter.sh
+        echo 'export PATH="$PATH:/opt/flutter/bin"' | tee -a /etc/environment
+        source /etc/environment
 
-    # ========== 代码与缓存 ==========
-    - name: 检出代码
-      uses: actions/checkout@v4
-
-    - name: 缓存pub依赖
-      uses: actions/cache@v3
-      with:
-        path: /opt/flutter/.pub-cache
-        key: ${{ runner.os }}-pub-cache-${{ hashFiles('pubspec.lock') }}
-
-    # ========== CentOS特化构建 ==========
-    - name: 构建CentOS可执行文件
+    # ==========   阶段6：构建流程 ==========
+    - name: 代码准备
       run: |
-        # 配置显示环境
-        Xvfb :99 -screen 0 1024x768x24 &
+        # 将宿主机代码挂载到容器
+        mkdir -p /workspace
+        cp -R /github/workspace/{pubspec.*,lib,assets} /workspace
+        cd /workspace
+
+    - name: 构建发布包
+      run: |
+        # X11虚拟显示
+        Xvfb :99 -ac -screen 0 1280x1024x24 &
         export DISPLAY=:99
 
-        # 强制使用系统库链接
+        # 动态链接器修复 | **解决GLIBC兼容**
         flutter build linux \
           --release \
           --target-platform linux-x64 \
-          --split-debug-info \
-          --dart-define=FORCE_STATIC=1 \
-          --dynamic-linker=/lib64/ld-linux-x86-64.so.2  
+          --dart-define=FORCE_SYSTEM_LINK=1 \
+          --dynamic-linker=/lib64/ld-linux-x86-64.so.2 \
+          --split-debug-info=build/debug_info
+
+    # ========== CentOS特化构建 ==========
+    # - name: 构建CentOS可执行文件
+    #   run: |
+    #     # 配置显示环境
+    #     Xvfb :99 -screen 0 1024x768x24 &
+    #     export DISPLAY=:99
+
+    #     # 强制使用系统库链接
+    #     flutter build linux \
+    #       --release \
+    #       --target-platform linux-x64 \
+    #       --split-debug-info \
+    #       --dart-define=FORCE_STATIC=1 \
+    #       --dynamic-linker=/lib64/ld-linux-x86-64.so.2  
 
     # ========== RPM打包 ==========
     - name: 生成CentOS安装包
       run: |
-        yum install -y rpm-build
-        RPMBUILD=$(mktemp -d)
+        yum install -y rpm-build redhat-rpm-config
+        RPMBUILD=$(mktemp -d -t rpmbuild.XXXXXX)
 
         # 创建spec文件
         cat <<EOF > $RPMBUILD/SPECS/flutter_app.spec
@@ -110,22 +162,31 @@ jobs:
         CentOS兼容的Flutter应用程序
 
         %install
-        mkdir -p %{buildroot}/opt/flutter-app
-        cp -R build/linux/x64/release/bundle/* %{buildroot}/opt/flutter-app/
+        # mkdir -p %{buildroot}/opt/my_desktop_app_test
+        # cp -R build/linux/x64/release/bundle/* %{buildroot}/opt/my_desktop_app_test/
+
+        mkdir -p %{buildroot}/opt/my_desktop_app_test
+        cp -r /workspace/build/linux/x64/release/bundle/* %{buildroot}/opt/my_desktop_app_test/
 
         %files
-        /opt/flutter-app/
+        /opt/my_desktop_app_test/
 
         %post
         # Desktop文件注册
-        cp %{buildroot}/opt/flutter-app/*.desktop /usr/share/applications/
-        update-desktop-database
+        # cp %{buildroot}/opt/my_desktop_app_test/*.desktop /usr/share/applications/
+        # update-desktop-database
+        # EOF
+
+        desktop-file-install /opt/my_desktop_app_test/*.desktop
         EOF
 
         # 构建RPM包
-        rpmbuild -bb --define "_topdir $RPMBUILD" $RPMBUILD/SPECS/flutter_app.spec
-        mkdir -p artifacts
-        cp $RPMBUILD/RPMS/**/*.rpm artifacts/
+        # rpmbuild -bb --define "_topdir $RPMBUILD" $RPMBUILD/SPECS/my_desktop_app_test.spec
+        # mkdir -p artifacts
+        # cp $RPMBUILD/RPMS/**/*.rpm artifacts/
+        # 归档产物
+        mkdir -p $GITHUB_WORKSPACE/artifacts
+        find $RPMBUILD/RPMS -name '*.rpm' -exec cp {} $GITHUB_WORKSPACE/artifacts \;
 
     # ========== 产物流转 ==========
     - name: 上传RPM包
