@@ -1,5 +1,5 @@
-name: CentOS 7 Desktop Build Pipeline
-on: 
+name: CentOS 7 Flutter Build Pipeline
+on:
   push:
     branches: [ main, master ]
   workflow_dispatch:
@@ -12,201 +12,173 @@ jobs:
       options: >-
         --security-opt seccomp=unconfined
         --dns 8.8.8.8
-        --device /dev/dri
+        --dns 1.1.1.1
         -v /tmp/.X11-unix:/tmp/.X11-unix
-        -v /usr/share/fonts:/usr/share/fonts:ro  
         -v /github/workspace:/workspace
 
     steps:
-    # ========== 强制容器内Node.js隔离 ==========
-    - name: 禁用宿主Node环境
+    # ================= 环境隔离阶段 =================
+    - name: 禁用宿主Node注入
       env:
-        ACTIONS_RUNNER_HOOK_JOB_STARTED: /bin/true  # 绕过宿主机Node注入
+        ACTIONS_RUNNER_HOOK_JOB_STARTED: /bin/true  # 阻断GitHub自动注入Node环境
       run: |
-        # 清理可能存在的宿主Node路径
-        sed -i '/\/__e\/node20/d' /etc/environment
-        echo "容器隔离检查完成"
+        echo "执行环境隔离..."
+        rm -f /etc/profile.d/nodejs.sh
+        sed -i '/\/__e\/node/d' /etc/environment
 
-    # ========== 系统级GLIBC修补 ==========
-    - name: GLIBC动态库升级
+    # ================= 系统基础配置 =================
+    - name: 系统初始化
       run: |
-        # 安装基础编译工具
-        yum install -y wget make gcc-c++
-
-        # 编译安装GLIBC 2.28
-        cd /tmp
-        wget https://ftp.gnu.org/gnu/glibc/glibc-2.28.tar.gz
-        tar xzf glibc-2.28.tar.gz
-        mkdir glibc-build && cd glibc-build
-        ../glibc-2.28/configure --prefix=/usr --disable-profile --enable-add-ons
-        make -j$(nproc)
-        make install
-
-        # 兼容层配置
-        echo "/usr/glibc-compat/lib" > /etc/ld.so.conf.d/glibc-compat.conf
-        ldconfig -v | grep 'libc.so'
-
-    # ========== Node.js源码编译安装 ==========
-    - name: Node.js生态兼容
-      run: |
-        # 安装新版GCC环境
-        yum install -y centos-release-scl
-        yum --enablerepo=extras install -y devtoolset-10
-        source /opt/rh/devtoolset-10/enable
-
-        # 从源码编译Node.js 16（兼容GLIBC 2.28）
-        cd /tmp
-        wget https://nodejs.org/dist/v16.20.2/node-v16.20.2.tar.gz
-        tar xzf node-v16.20.2.tar.gz
-        cd node-v16.20.2
-        ./configure --prefix=/usr/local/node16
-        make -j$(nproc)
-        make install
-
-        # 环境变量覆盖
-        echo 'export PATH="/usr/local/node16/bin:$PATH"' >> /etc/profile.d/node.sh
-        source /etc/profile.d/node.sh
-        node -v  # 应显示v16.20.2
-
-    # ================= 阶段1：系统级修复 =================
-    - name: 系统基础配置
-      run: |
-        # 强制刷新DNS配置
+        # DNS固化配置
         chattr -i /etc/resolv.conf
         echo "nameserver 8.8.8.8" > /etc/resolv.conf
         echo "nameserver 1.1.1.1" >> /etc/resolv.conf
         chattr +i /etc/resolv.conf
 
-        # 华为云源深度配置
-        rm -rf /etc/yum.repos.d/CentOS-*
-        curl -sSL -o /etc/yum.repos.d/CentOS-Base.repo \
+        # 换源与存储库配置
+        rm -rf /etc/yum.repos.d/*
+        curl -sSLo /etc/yum.repos.d/CentOS-Base.repo \
           https://repo.huaweicloud.com/repository/conf/CentOS-7-reg.repo
-        sed -i -e 's/^mirrorlist/#mirrorlist/' -e 's/^#baseurl=/baseurl=/' /etc/yum.repos.d/CentOS-Base.repo
-        
-        # 扩展源配置
-        rpm --import https://dl.fedoraproject.org/pub/epel/RPM-GPG-KEY-EPEL-7
-        yum install -y epel-release
-        rpm --import https://packages.microsoft.com/keys/microsoft.asc
-        curl -sSL -o /etc/yum.repos.d/msprod.repo \
-          https://packages.microsoft.com/config/rhel/7/prod.repo
+        sed -i 's/^mirrorlist/#mirrorlist/g;s/^#baseurl=/baseurl=/g' /etc/yum.repos.d/CentOS-Base.repo
 
-        # 强制缓存重建
-        yum clean all
-        yum makecache fast
+        # 安装基础工具
+        yum install -y deltarpm epel-release yum-utils
 
-    # ================= 阶段2：工具链升级 =================
-    - name: GLIBC兼容处理
+    # ================= GLIBC 兼容层 =================
+    - name: 安装新版GLIBC
       run: |
-        # 安装开发工具链（解决GLIBC问题）
+        # 安装开发依赖
+        yum install -y wget gcc-c++ make bison
+        
+        # 下载并编译GLIBC 2.28
+        cd /tmp
+        wget https://ftp.gnu.org/gnu/glibc/glibc-2.28.tar.gz
+        tar xzf glibc-2.28.tar.gz
+        mkdir glibc-build && cd glibc-build
+        ../glibc-2.28/configure --prefix=/usr \
+          --disable-profile \
+          --enable-add-ons \
+          --with-headers=/usr/include \
+          --with-binutils=/usr/bin
+        make -j$(nproc)
+        make install
+        
+        # 重建库缓存
+        ldconfig -v | grep libc.so
+
+    # ================= 工具链升级 =================
+    - name: 升级编译工具链
+      run: |
+        # 安装SCL仓库
         yum install -y centos-release-scl
-        yum --enablerepo=extras install -y devtoolset-10 llvm-toolset-7
 
-        # 永久化工具链配置
-        echo 'source /opt/rh/devtoolset-10/enable' >> /etc/bashrc
-        echo 'source /opt/rh/llvm-toolset-7/enable' >> /etc/bashrc
-        
-        # 动态链接库修复
-        ln -sf /opt/rh/devtoolset-10/root/usr/lib64/libstdc++.so.6.0.28 /usr/lib64/libstdc++.so.6
-        ldconfig
+        # 安装开发工具集
+        yum --enablerepo=extras install -y \
+          devtoolset-10 \
+          llvm-toolset-7 \
+          rh-nodejs16
 
-        # 验证环境
-        echo "--- GCC Version ---"
-        gcc --version
-        echo "--- GLIBCXX Versions ---"
-        strings /usr/lib64/libstdc++.so.6 | grep GLIBCXX
+        # 永久启用工具链
+        tee /etc/profile.d/toolchain.sh <<EOF
+        source /opt/rh/devtoolset-10/enable
+        source /opt/rh/llvm-toolset-7/enable
+        source /opt/rh/rh-nodejs16/enable
+        export PATH="/opt/rh/rh-nodejs16/root/usr/bin:\$PATH"
+        EOF
+        source /etc/profile.d/toolchain.sh
 
-    # ================= 阶段3：环境依赖安装 =================
-    - name: 安装系统依赖
+        # 验证工具版本
+        gcc --version | head -n1
+        node --version
+
+    # ================= 图形依赖安装 =================
+    - name: 安装X11依赖
       run: |
-        # 核心依赖包
+        # X Window系统
+        yum groupinstall -y "X Window System"
+        
+        # 图形驱动
         yum install -y \
-          xorg-x11-server-Xvfb \ 
           mesa-dri-drivers \
+          xorg-x11-server-Xvfb \
           gtk3-devel \
-          dbus-x11 \
-          clang \
-          cmake \
-          ninja-build \
-          --nogpgcheck
+          dbus-x11
 
-        # GNOME环境支持
-        yum groupinstall -y "X Window System" "GNOME"
-        systemctl unmask dbus.service
+        # 初始化DBUS
         dbus-uuidgen > /var/lib/dbus/machine-id
 
-    # ================= 阶段4：Flutter环境 =================
+    # ================= Flutter环境 =================
     - name: 配置Flutter SDK
       run: |
         cd /opt
-        wget -q --tries=5 --retry-connrefused \
+        wget -q --show-progress --tries=5 \
           https://storage.googleapis.com/flutter_infra_release/releases/stable/linux/flutter_linux_3.29.0-stable.tar.xz
         tar xf flutter_linux_3.29.0-stable.tar.xz
-
+        
         # 全局路径配置
-        echo 'export FLUTTER_HOME=/opt/flutter' >> /etc/profile.d/flutter.sh
-        echo 'export PATH="$PATH:$FLUTTER_HOME/bin"' >> /etc/profile.d/flutter.sh
+        tee /etc/profile.d/flutter.sh <<EOF
+        export FLUTTER_HOME=/opt/flutter
+        export PATH="\$FLUTTER_HOME/bin:\$PATH"
+        EOF
         source /etc/profile.d/flutter.sh
-
-        # 依赖预下载
+        
+        # 初始化Flutter
+        flutter doctor -v
         flutter precache --force --target-platform=linux-x64
 
-    # ================= 阶段5：构建准备 =================
-    - name: 工作目录处理
+    # ================= 构建准备阶段 =================
+    - name: 准备代码库
+      uses: actions/checkout@v4
+      with:
+        path: /workspace
+        fetch-depth: 0
+      
+    - name: 修复项目权限
       run: |
-        mkdir -p /workspace/build
-        cp -R /github/workspace/{pubspec.*,lib,assets,linux} /workspace
+        chmod -R 755 /workspace/linux
         cd /workspace
-
-        # 修复文件权限
-        chmod -R 755 linux
         flutter pub get
 
-    # ================= 阶段6：构建执行 =================
-    - name: 带环境构建
+    # ================= 核心构建阶段 =================
+    - name: 执行Flutter构建
       run: |
-        # Xvfb虚拟显示
+        # 启动虚拟显示器
         Xvfb :99 -screen 0 1280x1024x24 -ac +extension GLX +render -noreset &
         export DISPLAY=:99
-        
-        # 专用构建配置文件
-        echo 'ENABLE_VSYNC=false' >> .env
-        echo 'FORCE_SOFTWARE_RENDERING=true' >> .env
 
-        # 带工具链环境构建
-        scl enable devtoolset-10 llvm-toolset-7 -- \
+        # 在隔离环境中构建
+        scl enable devtoolset-10 rh-nodejs16 -- \
           flutter build linux \
             --release \
             --target-platform linux-x64 \
-            --split-debug-info=build/debug_info \
             --dart-define=FORCE_SYSTEM_LINK=1 \
             --dynamic-linker=/lib64/ld-linux-x86-64.so.2 \
-            --target-arch x64 \
-            --target-sysroot / \
+            --split-debug-info=build/debug_info \
             --verbose
 
-    # ================= 阶段7：RPM打包 =================
+    # ================= RPM打包 =================
     - name: 生成安装包
       run: |
-        # RPM依赖安装
-        yum install -y rpm-build redhat-rpm-config
-
-        # 准备构建环境
+        # 安装打包工具
+        yum install -y rpm-build createrepo
+        
+        # 创建临时构建目录
         RPMBUILD=$(mktemp -d -p /tmp rpmbuild.XXXXXX)
         mkdir -p $RPMBUILD/{BUILD,RPMS,SOURCES,SPECS,SRPMS}
 
-        # Spec文件生成
-        cat <<EOF > $RPMBUILD/SPECS/flutter_app.spec
-        %define _build_name_ver $(date +%Y%m%d)
-        Name:       flutter-desktop-app
-        Version:    %{_build_name_ver}
-        Release:    1%{?dist}
-        Summary:    CentOS 7 Optimized Flutter App
-        License:    Commercial
-        URL:        https://github.com/mylizhixiang/my_desktop_app_test
-        Requires:   gtk3, mesa-libGL
+        # 生成spec文件
+        tee $RPMBUILD/SPECS/flutter_app.spec <<'EOF'
+        %define _build_name_ver $(date +%s)
+        Name:           flutter-desktop
+        Version:        1.0
+        Release:        %{_build_name_ver}%{?dist}
+        Summary:        CentOS 7 Compatible Flutter Application
+        License:        MIT
+        URL:            https://github.com/mylizhixiang/my_desktop_app_test
+        Requires:       gtk3 mesa-libGL
 
         %description
-        CentOS 7 compatible Flutter desktop application
+        Flutter application with CentOS 7 compatibility layer.
 
         %install
         mkdir -p %{buildroot}/opt/myapp
@@ -216,25 +188,24 @@ jobs:
         /opt/myapp/
 
         %post
-        # Desktop文件处理
         desktop-file-install --dir=/usr/share/applications %{buildroot}/opt/myapp/*.desktop
         gtk-update-icon-cache /usr/share/icons/hicolor/
         EOF
 
-        # RPM构建命令
+        # 执行RPM构建
         rpmbuild -bb \
           --define "_topdir $RPMBUILD" \
           --target x86_64 \
           $RPMBUILD/SPECS/flutter_app.spec
 
-        # 产物收集
-        mkdir -p $GITHUB_WORKSPACE/artifacts
-        find $RPMBUILD/RPMS -name '*.rpm' -exec cp {} $GITHUB_WORKSPACE/artifacts/
+        # 收集构建产物
+        mkdir -p /workspace/artifacts
+        find $RPMBUILD/RPMS -name '*.rpm' -exec cp {} /workspace/artifacts \;
 
-    # ================= 阶段8：产物上传 =================
-    - name: 上传产成品
+    # ================= 产物上传 =================
+    - name: 上传RPM包
       uses: actions/upload-artifact@v4
       with:
         name: centos7-flutter-rpm
-        path: artifacts/*.rpm
-        retention-days: 5
+        path: /workspace/artifacts/*.rpm
+        retention-days: 7
