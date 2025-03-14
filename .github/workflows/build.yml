@@ -29,6 +29,8 @@ jobs:
     # ================= 系统基础配置 =================
     - name: 系统初始化
       run: |
+        # 安装基础工具（新增e2fsprogs）
+        yum install -y e2fsprogs deltarpm epel-release yum-utils
         # DNS固化配置
         chattr -i /etc/resolv.conf
         echo "nameserver 8.8.8.8" > /etc/resolv.conf
@@ -40,6 +42,10 @@ jobs:
         curl -sSLo /etc/yum.repos.d/CentOS-Base.repo \
           https://repo.huaweicloud.com/repository/conf/CentOS-7-reg.repo
         sed -i 's/^mirrorlist/#mirrorlist/g;s/^#baseurl=/baseurl=/g' /etc/yum.repos.d/CentOS-Base.repo
+
+        # 重建YUM缓存
+        yum clean all
+        yum makecache fast
 
         # 安装基础工具
         yum install -y deltarpm epel-release yum-utils
