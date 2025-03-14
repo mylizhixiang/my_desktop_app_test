@@ -1,4 +1,4 @@
-name: CentOS 7 Desktop App Build
+name: CentOS 7 Desktop Build Pipeline
 on: 
   push:
     branches: [ main, master ]
@@ -6,71 +6,112 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
     container:
-      image: centos:7
-      # ====== 关键调整部分 ======
+      image: centos:7  # 或 centos:8/9 匹配目标系统
       options: >-
         --security-opt seccomp=unconfined
-        --device /dev/dri:/dev/dri
+        --device /dev/dri
         -v /tmp/.X11-unix:/tmp/.X11-unix
 
     steps:
-    # ========== 系统修复阶段 ==========
-    - name: 修复CentOS 7仓库
+    # ========== CentOS仓库修复 ==========
+    - name: 修复仓库源 (CentOS 7)
+      if: startsWith(matrix.os, 'centos7')
       run: |
-        sed -i.bak \
-          's|^mirrorlist=|#mirrorlist=|g;
-           s|^#\s*baseurl=http://mirror.centos.org/centos|baseurl=http://vault.centos.org|g' \
-          /etc/yum.repos.d/CentOS-*.repo
+        rm -rf /etc/yum.repos.d/*
+        curl -Os https://repo.huaweicloud.com/repository/conf/CentOS-7-reg.repo
+        mv CentOS-7-reg.repo /etc/yum.repos.d/CentOS-Base.repo
+        rpm --import https://repo.huaweicloud.com/epel/RPM-GPG-KEY-EPEL-7
 
-        rpm --import http://vault.centos.org/RPM-GPG-KEY-CentOS-7
+    # ========== Flutter依赖安装 ==========    
+    - name: 安装必要组件
+      run: |
         yum install -y epel-release
-
-    # ========== 开发环境配置 ==========
-    - name: 安装构建工具链
-      run: |
+        yum groupinstall -y "Development Tools"
         yum install -y \
-          centos-release-scl \
-          devtoolset-11 \
-          qt5-qtbase-devel \
+          clang \
+          cmake \
+          ninja-build \
           gtk3-devel \
-          xorg-x11-server-Xvfb \
-          mesa-dri-drivers
+          mesa-libGL-devel \
+          libxkbcommon-x11-devel \
+          xorg-x11-server-Xvfb
 
-    # ========== 构建调试阶段 ==========
-    - name: 校验OpenGL支持
+    # ========== Flutter SDK ==========
+    - name: 安装Flutter
       run: |
-        glxinfo -B | grep -i 'OpenGL renderer' || true
-        Xvfb :99 -screen 0 1024x768x24 &
-        export DISPLAY=:99
-        xdpyinfo
+        cd /opt
+        wget https://storage.googleapis.com/flutter_infra_release/releases/stable/linux/flutter_linux_3.29.0-stable.tar.xz
+        tar xf flutter_linux_3.29.0-stable.tar.xz
+        echo 'export PATH="$PATH:/opt/flutter/bin"' >> /etc/profile.d/flutter.sh
+        source /etc/profile.d/flutter.sh
 
-    # ========== 项目构建流程 ==========
-    - name: 检出源码
+    # ========== 代码与缓存 ==========
+    - name: 检出代码
       uses: actions/checkout@v4
 
-    - name: CMake配置
-      run: scl enable devtoolset-11 -- cmake -B build -DCMAKE_BUILD_TYPE=RelWithDebInfo
+    - name: 缓存pub依赖
+      uses: actions/cache@v3
+      with:
+        path: /opt/flutter/.pub-cache
+        key: ${{ runner.os }}-pub-cache-${{ hashFiles('pubspec.lock') }}
 
-    - name: 编译应用程序
-      run: scl enable devtoolset-11 -- cmake --build build --parallel $(nproc)
-
-    - name: 图形界面测试
+    # ========== CentOS特化构建 ==========
+    - name: 构建CentOS可执行文件
       run: |
-        Xvfb :99 -screen 0 1280x1024x24 &
+        # 配置显示环境
+        Xvfb :99 -screen 0 1024x768x24 &
         export DISPLAY=:99
-        build/myapp --test-gui
 
-    - name: 打包RPM
+        # 强制使用系统库链接
+        flutter build linux \
+          --release \
+          --target-platform linux-x64 \
+          --no-sound-null-safety \
+          --dart-define=GLIBC_VERSION=$(ldd --version | head -n1 | grep -oP '\d+\.\d+') \
+          --dart-define=FORCE_STATIC=1 # 静态链接关键库
+
+    # ========== RPM打包 ==========
+    - name: 生成CentOS安装包
       run: |
         yum install -y rpm-build
-        cmake --build build --target package
-        mkdir -p artifacts
-        cp build/*.rpm artifacts/
+        RPMBUILD=$(mktemp -d)
 
-    - name: 上传产物
-      uses: actions/upload-artifact@v4.3.3
+        # 创建spec文件
+        cat <<EOF > $RPMBUILD/SPECS/flutter_app.spec
+        Name:       flutter-app
+        Version:    $(date +%Y%m%d)
+        Release:    1%{?dist}
+        Summary:    Flutter App for CentOS
+        License:    MIT
+        URL:        https://github.com/mylizhixiang/my_desktop_app_test
+        Requires:   gtk3, mesa-libGL
+
+        %description
+        CentOS兼容的Flutter应用程序
+
+        %install
+        mkdir -p %{buildroot}/opt/flutter-app
+        cp -R build/linux/x64/release/bundle/* %{buildroot}/opt/flutter-app/
+
+        %files
+        /opt/flutter-app/
+
+        %post
+        # Desktop文件注册
+        cp %{buildroot}/opt/flutter-app/*.desktop /usr/share/applications/
+        update-desktop-database
+        EOF
+
+        # 构建RPM包
+        rpmbuild -bb --define "_topdir $RPMBUILD" $RPMBUILD/SPECS/flutter_app.spec
+        mkdir -p artifacts
+        cp $RPMBUILD/RPMS/**/*.rpm artifacts/
+
+    # ========== 产物流转 ==========
+    - name: 上传RPM包
+      uses: actions/upload-artifact@v4
       with:
-        name: centos7-artifacts
+        name: centos-flutter-pkg
         path: artifacts/*.rpm
