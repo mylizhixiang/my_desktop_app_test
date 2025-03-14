@@ -11,18 +11,27 @@ jobs:
       image: centos:7  # 或 centos:8/9 匹配目标系统
       options: >-
         --security-opt seccomp=unconfined
+        --dns 8.8.8.8  # 强制指定DNS服务器
         --device /dev/dri
         -v /tmp/.X11-unix:/tmp/.X11-unix
 
     steps:
-    # ========== CentOS仓库修复 ==========
-    - name: 修复仓库源 (CentOS 7)
-      if: startsWith(matrix.os, 'centos7')
+    # ========== 第一步：强制安装基础工具 ==========
+    - name: 安装基础工具
+      run: |
+        # 先安装基础工具
+        yum install -y --nogpgcheck wget
+    # ========== 第二步：强制替换镜像源 ==========
+    - name: 修复仓库源
       run: |
         rm -rf /etc/yum.repos.d/*
-        curl -Os https://repo.huaweicloud.com/repository/conf/CentOS-7-reg.repo
-        mv CentOS-7-reg.repo /etc/yum.repos.d/CentOS-Base.repo
+        wget -O /etc/yum.repos.d/CentOS-Base.repo https://repo.huaweicloud.com/repository/conf/CentOS-7-reg.repo
+        sed -i 's/#baseurl=/baseurl=/g' /etc/yum.repos.d/CentOS-Base.repo
+        sed -i 's/mirrorlist=http/#mirrorlist=http/g' /etc/yum.repos.d/CentOS-Base.repo
         rpm --import https://repo.huaweicloud.com/epel/RPM-GPG-KEY-EPEL-7
+    # ========== 第三步：重建缓存 ==========    
+    - name: 清理yum缓存
+      run: yum clean all && yum makecache
 
     # ========== Flutter依赖安装 ==========    
     - name: 安装必要组件
@@ -68,9 +77,9 @@ jobs:
         flutter build linux \
           --release \
           --target-platform linux-x64 \
-          --no-sound-null-safety \
-          --dart-define=GLIBC_VERSION=$(ldd --version | head -n1 | grep -oP '\d+\.\d+') \
-          --dart-define=FORCE_STATIC=1 # 静态链接关键库
+          --split-debug-info \
+          --dart-define=FORCE_STATIC=1 \
+          --dynamic-linker=/lib64/ld-linux-x86-64.so.2  # 强制指定动态链接器
 
     # ========== RPM打包 ==========
     - name: 生成CentOS安装包
