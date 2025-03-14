@@ -11,7 +11,7 @@ jobs:
       image: centos:7  # 或 centos:8/9 匹配目标系统
       options: >-
         --security-opt seccomp=unconfined
-        --dns 8.8.8.8  # 强制指定DNS服务器
+        --dns 8.8.8.8  
         --device /dev/dri
         -v /tmp/.X11-unix:/tmp/.X11-unix
 
@@ -79,7 +79,7 @@ jobs:
           --target-platform linux-x64 \
           --split-debug-info \
           --dart-define=FORCE_STATIC=1 \
-          --dynamic-linker=/lib64/ld-linux-x86-64.so.2  # 强制指定动态链接器
+          --dynamic-linker=/lib64/ld-linux-x86-64.so.2  
 
     # ========== RPM打包 ==========
     - name: 生成CentOS安装包
