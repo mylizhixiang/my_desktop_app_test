@@ -11,31 +11,40 @@ jobs:
       image: centos:7  # 或 centos:8/9 匹配目标系统
       options: >-
         --security-opt seccomp=unconfined
-        --dns 8.8.8.8  
+        --dns 8.8.8.8
+        --dns 1.1.1.1  
         --device /dev/dri
         -v /tmp/.X11-unix:/tmp/.X11-unix
 
     steps:
-    # ========== 第一步：强制安装基础工具 ==========
-    - name: 安装基础工具
+    # ========== 阶段1：基础环境修复 ==========
+    - name: 初始化仓库与网络
       run: |
-        # 先安装基础工具
-        yum install -y --nogpgcheck wget
-    # ========== 第二步：强制替换镜像源 ==========
-    - name: 修复仓库源
-      run: |
-        rm -rf /etc/yum.repos.d/*
-        wget -O /etc/yum.repos.d/CentOS-Base.repo https://repo.huaweicloud.com/repository/conf/CentOS-7-reg.repo
-        sed -i 's/#baseurl=/baseurl=/g' /etc/yum.repos.d/CentOS-Base.repo
-        sed -i 's/mirrorlist=http/#mirrorlist=http/g' /etc/yum.repos.d/CentOS-Base.repo
-        rpm --import https://repo.huaweicloud.com/epel/RPM-GPG-KEY-EPEL-7
-    # ========== 第三步：重建缓存 ==========    
-    - name: 清理yum缓存
-      run: yum clean all && yum makecache
+        # DNS修复
+        echo "nameserver 8.8.8.8" > /etc/resolv.conf
+        echo "nameserver 1.1.1.1" >> /etc/resolv.conf
 
-    # ========== Flutter依赖安装 ==========    
-    - name: 安装必要组件
+        # 更换华为云源（无需预先安装工具）
+        find /etc/yum.repos.d/ -type f -exec rm -f {} \;
+        curl -sSLo /etc/yum.repos.d/CentOS-Base.repo https://repo.huaweicloud.com/repository/conf/CentOS-7-reg.repo
+        sed -i -e 's/^mirrorlist/#mirrorlist/g' -e 's/^#baseurl=/baseurl=/g' /etc/yum.repos.d/CentOS-Base.repo
+        rpm --import https://repo.huaweicloud.com/epel/RPM-GPG-KEY-EPEL-7
+
+        # 重建缓存
+        yum clean all
+        yum makecache fast
+
+    # ========== 阶段2：工具链安装 ==========    
+    - name: 安装基础设施
       run: |
+        # 基础网络工具
+        yum install -y \
+          ca-certificates \
+          curl \
+          wget \
+          bind-utils \
+          --nogpgcheck
+
         yum install -y epel-release
         yum groupinstall -y "Development Tools"
         yum install -y \
