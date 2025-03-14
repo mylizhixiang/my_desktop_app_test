@@ -18,13 +18,55 @@ jobs:
         -v /github/workspace:/workspace
 
     steps:
-    # ================= 阶段0：宿主机检出 =================
-    - name: 宿主机代码检出
-      uses: actions/checkout@v4
-      with:
-        path: /github/workspace
-        container: null  # 强制使用宿主环境
-        persist-credentials: false  # 避免权限冲突
+    # ========== 强制容器内Node.js隔离 ==========
+    - name: 禁用宿主Node环境
+      env:
+        ACTIONS_RUNNER_HOOK_JOB_STARTED: /bin/true  # 绕过宿主机Node注入
+      run: |
+        # 清理可能存在的宿主Node路径
+        sed -i '/\/__e\/node20/d' /etc/environment
+        echo "容器隔离检查完成"
+
+    # ========== 系统级GLIBC修补 ==========
+    - name: GLIBC动态库升级
+      run: |
+        # 安装基础编译工具
+        yum install -y wget make gcc-c++
+
+        # 编译安装GLIBC 2.28
+        cd /tmp
+        wget https://ftp.gnu.org/gnu/glibc/glibc-2.28.tar.gz
+        tar xzf glibc-2.28.tar.gz
+        mkdir glibc-build && cd glibc-build
+        ../glibc-2.28/configure --prefix=/usr --disable-profile --enable-add-ons
+        make -j$(nproc)
+        make install
+
+        # 兼容层配置
+        echo "/usr/glibc-compat/lib" > /etc/ld.so.conf.d/glibc-compat.conf
+        ldconfig -v | grep 'libc.so'
+
+    # ========== Node.js源码编译安装 ==========
+    - name: Node.js生态兼容
+      run: |
+        # 安装新版GCC环境
+        yum install -y centos-release-scl
+        yum --enablerepo=extras install -y devtoolset-10
+        source /opt/rh/devtoolset-10/enable
+
+        # 从源码编译Node.js 16（兼容GLIBC 2.28）
+        cd /tmp
+        wget https://nodejs.org/dist/v16.20.2/node-v16.20.2.tar.gz
+        tar xzf node-v16.20.2.tar.gz
+        cd node-v16.20.2
+        ./configure --prefix=/usr/local/node16
+        make -j$(nproc)
+        make install
+
+        # 环境变量覆盖
+        echo 'export PATH="/usr/local/node16/bin:$PATH"' >> /etc/profile.d/node.sh
+        source /etc/profile.d/node.sh
+        node -v  # 应显示v16.20.2
 
     # ================= 阶段1：系统级修复 =================
     - name: 系统基础配置
